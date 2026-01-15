@@ -102,6 +102,11 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     {
         InitializeComponent();
         InitializeEngine();
+
+        // Ensure one-tap click-to-seek works even if Slider template handles the mouse event.
+        TimelineSlider.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(TimelineSlider_PreviewMouseDown),
+            true);
     }
 
     private void InitializeEngine()

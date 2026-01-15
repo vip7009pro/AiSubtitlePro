@@ -16,6 +16,7 @@ public unsafe class VideoEngine : IDisposable
     private readonly FfmpegVideoDecoder _decoder;
 
     private WriteableBitmap? _writeableBitmap;
+    private IntPtr _videoFrameBuffer;
     private IntPtr _compositedBuffer;
     private int _width;
     private int _height;
@@ -78,7 +79,41 @@ public unsafe class VideoEngine : IDisposable
     public void SetSubtitleContent(string content)
     {
         _assRenderer?.SetContent(content);
-        RenderSingleFrame();
+        RenderCurrentFrameWithSubtitles();
+    }
+
+    private void RenderCurrentFrameWithSubtitles()
+    {
+        try
+        {
+            if (_writeableBitmap == null) return;
+            if (_videoFrameBuffer == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+
+            // Start from last decoded frame
+            Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+
+            // Render subtitles at current editor position (do not advance video)
+            var subTime = Position;
+            if (_assRenderer != null)
+            {
+                bool changed;
+                IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
+                if (imgPtr != IntPtr.Zero)
+                    BlendSubtitles(imgPtr);
+            }
+
+            _uiDispatcher?.BeginInvoke(() =>
+            {
+                if (_writeableBitmap == null) return;
+                _writeableBitmap.Lock();
+                _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
+                _writeableBitmap.Unlock();
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"RenderCurrentFrameWithSubtitles error: {ex}");
+        }
     }
 
     public void Play()
@@ -181,11 +216,13 @@ public unsafe class VideoEngine : IDisposable
         if (!_decoder.TryDecodeNextFrame(out pts))
             return false;
 
-        // Copy decoded BGRA into composited buffer
-        Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+        // Copy decoded BGRA into cached video frame + composited buffer
+        Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_videoFrameBuffer, (long)(_stride * _height), (long)(_stride * _height));
+        Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
 
         // Render and blend subtitles for current timestamp
-        var subTime = pts != TimeSpan.Zero ? pts : Position;
+        // When not playing (seek/scrub/edit), use the requested editor Position to avoid pts drift.
+        var subTime = (_isPlaying && pts != TimeSpan.Zero) ? pts : Position;
         if (_assRenderer != null)
         {
             bool changed;
@@ -217,6 +254,13 @@ public unsafe class VideoEngine : IDisposable
             _compositedBuffer = IntPtr.Zero;
         }
 
+        if (_videoFrameBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_videoFrameBuffer);
+            _videoFrameBuffer = IntPtr.Zero;
+        }
+
+        _videoFrameBuffer = Marshal.AllocHGlobal(_stride * _height);
         _compositedBuffer = Marshal.AllocHGlobal(_stride * _height);
 
         _uiDispatcher?.Invoke(() =>
@@ -319,6 +363,12 @@ public unsafe class VideoEngine : IDisposable
         {
             Marshal.FreeHGlobal(_compositedBuffer);
             _compositedBuffer = IntPtr.Zero;
+        }
+
+        if (_videoFrameBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_videoFrameBuffer);
+            _videoFrameBuffer = IntPtr.Zero;
         }
     }
 }

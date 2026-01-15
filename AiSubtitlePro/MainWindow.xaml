@@ -279,25 +279,22 @@
                                     <TextBlock Text="Font" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="55" Text="{Binding SelectedStyleFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
                                              Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Font Size"
-                                             Background="#121212" Foreground="White" CaretBrush="White"/>
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"/>
 
                                     <TextBlock Text="Color" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="95" Text="{Binding SelectedStylePrimaryAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Primary (&amp;H...)"
-                                             Background="#121212" Foreground="White" CaretBrush="White"/>
+                                    <Button Content="Pick" Click="PickPrimaryColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
+                                    <TextBlock Text="{Binding SelectedStylePrimaryAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
 
                                     <TextBlock Text="Stroke" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="45" Text="{Binding SelectedStyleOutline, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
                                              Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,6,0" ToolTip="Outline"
-                                             Background="#121212" Foreground="White" CaretBrush="White"/>
-                                    <TextBox Width="95" Text="{Binding SelectedStyleOutlineAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="OutlineColor (&amp;H...)"
-                                             Background="#121212" Foreground="White" CaretBrush="White"/>
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"/>
+                                    <Button Content="Pick" Click="PickOutlineColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
+                                    <TextBlock Text="{Binding SelectedStyleOutlineAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
 
                                     <TextBlock Text="Box" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="95" Text="{Binding SelectedStyleBackAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="BackColor (&amp;H...)"
-                                             Background="#121212" Foreground="White" CaretBrush="White"/>
+                                    <Button Content="Pick" Click="PickBackColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
+                                    <TextBlock Text="{Binding SelectedStyleBackAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
                                     <CheckBox Content="Enable" IsChecked="{Binding SelectedStyleBoxEnabled, Mode=TwoWay}" VerticalAlignment="Center"/>
                                 </WrapPanel>
 
@@ -320,9 +317,9 @@
                                      VerticalScrollBarVisibility="Auto"
                                      FontSize="16"
                                      FontFamily="Segoe UI"
-                                     Background="#121212"
-                                     Foreground="#F1F1F1"
-                                     CaretBrush="White"
+                                     Background="White"
+                                     Foreground="#111111"
+                                     CaretBrush="#111111"
                                      Padding="8" 
                                      Style="{StaticResource MaterialDesignOutlinedTextBox}"/>
                         </Grid>

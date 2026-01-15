@@ -11,9 +11,9 @@
     <Color x:Key="PrimaryColor">#2196F3</Color>
     <Color x:Key="PrimaryDarkColor">#1976D2</Color>
     <Color x:Key="AccentColor">#00BCD4</Color>
-    <Color x:Key="BackgroundDarkColor">#1E1E1E</Color>
-    <Color x:Key="SurfaceColor">#252526</Color>
-    <Color x:Key="SurfaceLightColor">#2D2D30</Color>
+    <Color x:Key="BackgroundDarkColor">#F5F5F5</Color>
+    <Color x:Key="SurfaceColor">#FFFFFF</Color>
+    <Color x:Key="SurfaceLightColor">#F0F0F0</Color>
     
     <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource PrimaryColor}" />
     <SolidColorBrush x:Key="PrimaryDarkBrush" Color="{StaticResource PrimaryDarkColor}" />
@@ -25,10 +25,10 @@
     <!-- Subtitle Grid Styles -->
     <Style x:Key="SubtitleGridStyle" TargetType="DataGrid">
         <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Foreground" Value="#111111" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="GridLinesVisibility" Value="Horizontal" />
-        <Setter Property="HorizontalGridLinesBrush" Value="#3F3F46" />
+        <Setter Property="HorizontalGridLinesBrush" Value="#DDDDDD" />
         <Setter Property="RowHeight" Value="28" />
         <Setter Property="SelectionMode" Value="Extended" />
         <Setter Property="SelectionUnit" Value="FullRow" />
@@ -48,7 +48,7 @@
         <Setter Property="BorderThickness" Value="0" />
         <Style.Triggers>
             <Trigger Property="IsSelected" Value="True">
-                <Setter Property="Background" Value="{StaticResource PrimaryDarkBrush}" />
+                <Setter Property="Background" Value="#D6E9FF" />
             </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
                 <Setter Property="Background" Value="{StaticResource SurfaceLightBrush}" />
@@ -73,7 +73,7 @@
         <Style.Triggers>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="Transparent" />
-                <Setter Property="Foreground" Value="White" />
+                <Setter Property="Foreground" Value="#111111" />
             </Trigger>
         </Style.Triggers>
     </Style>
@@ -88,13 +88,13 @@
     <!-- Toolbar Styles -->
     <Style x:Key="ModernToolBarStyle" TargetType="ToolBar">
         <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Foreground" Value="#111111" />
     </Style>
 
     <!-- Button Styles -->
     <Style x:Key="ToolButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Foreground" Value="#111111" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="8,4" />
         <Setter Property="Cursor" Value="Hand" />
@@ -113,6 +113,7 @@
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="border" Property="Background" Value="{StaticResource PrimaryBrush}" />
+                            <Setter Property="Foreground" Value="White" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

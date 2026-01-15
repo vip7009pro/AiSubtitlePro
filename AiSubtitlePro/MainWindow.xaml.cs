@@ -1,6 +1,8 @@
 ﻿using AiSubtitlePro.Controls;
 using AiSubtitlePro.ViewModels;
 using System.Windows;
+using Forms = System.Windows.Forms;
+using AiSubtitlePro.Core.Models;
 
 namespace AiSubtitlePro;
 
@@ -37,9 +39,50 @@ public partial class MainWindow : Window
         vm.RefreshSubtitlePreview();
     }
 
+    private void PickPrimaryColor_Click(object sender, RoutedEventArgs e)
+    {
+        PickAssColor(color =>
+        {
+            if (ViewModel == null) return;
+            ViewModel.SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(color);
+        });
+    }
+
+    private void PickOutlineColor_Click(object sender, RoutedEventArgs e)
+    {
+        PickAssColor(color =>
+        {
+            if (ViewModel == null) return;
+            ViewModel.SelectedStyleOutlineAssColor = SubtitleStyle.ColorToAss(color);
+        });
+    }
+
+    private void PickBackColor_Click(object sender, RoutedEventArgs e)
+    {
+        PickAssColor(color =>
+        {
+            if (ViewModel == null) return;
+            ViewModel.SelectedStyleBackAssColor = SubtitleStyle.ColorToAss(color);
+        });
+    }
+
+    private static void PickAssColor(Action<System.Drawing.Color> setter)
+    {
+        using var dlg = new Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true
+        };
+
+        if (dlg.ShowDialog() == Forms.DialogResult.OK)
+        {
+            setter(dlg.Color);
+        }
+    }
+
     private void Exit_Click(object sender, RoutedEventArgs e)
     {
-        Application.Current.Shutdown();
+        System.Windows.Application.Current.Shutdown();
     }
 
     private void VideoPlayer_PositionChanged(object? sender, TimeSpan position)
