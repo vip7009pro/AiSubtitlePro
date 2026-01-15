@@ -30,6 +30,9 @@ public unsafe class VideoEngine : IDisposable
 
     public ImageSource? VideoSource => _writeableBitmap;
 
+    public int VideoWidth => _width;
+    public int VideoHeight => _height;
+
     public TimeSpan Position { get; private set; }
     public TimeSpan Duration { get; private set; }
     public bool IsPlaying => _isPlaying;

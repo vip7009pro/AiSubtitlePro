@@ -94,6 +94,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? MediaLoaded;
     public event EventHandler? MediaEnded;
+    public event EventHandler<(int X, int Y)>? VideoClicked;
 
     #endregion
 
@@ -248,6 +249,35 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void UpdateSubtitleOverlay(string? text)
     {
         _videoEngine?.SetSubtitleContent(text ?? "");
+    }
+
+    private void VideoImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var engine = _videoEngine;
+        if (engine == null) return;
+        if (engine.VideoWidth <= 0 || engine.VideoHeight <= 0) return;
+
+        var p = e.GetPosition(VideoImage);
+        var viewW = VideoImage.ActualWidth;
+        var viewH = VideoImage.ActualHeight;
+        if (viewW <= 0 || viewH <= 0) return;
+
+        // Stretch=Uniform => letterboxing. Map click point to source pixel coords.
+        var scale = Math.Min(viewW / engine.VideoWidth, viewH / engine.VideoHeight);
+        if (scale <= 0) return;
+
+        var contentW = engine.VideoWidth * scale;
+        var contentH = engine.VideoHeight * scale;
+        var offsetX = (viewW - contentW) / 2;
+        var offsetY = (viewH - contentH) / 2;
+
+        var x = (p.X - offsetX) / scale;
+        var y = (p.Y - offsetY) / scale;
+        if (x < 0 || y < 0 || x > engine.VideoWidth || y > engine.VideoHeight) return;
+
+        var xi = (int)Math.Round(Math.Clamp(x, 0, engine.VideoWidth));
+        var yi = (int)Math.Round(Math.Clamp(y, 0, engine.VideoHeight));
+        VideoClicked?.Invoke(this, (xi, yi));
     }
 
     #region UI Event Handlers

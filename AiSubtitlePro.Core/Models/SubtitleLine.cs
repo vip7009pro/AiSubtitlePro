@@ -21,6 +21,8 @@ public class SubtitleLine : INotifyPropertyChanged
     private int _marginL;
     private int _marginR;
     private int _marginV;
+    private int? _posX;
+    private int? _posY;
     private DialogueType _type = DialogueType.Dialogue;
     private bool _isSelected;
 
@@ -135,6 +137,18 @@ public class SubtitleLine : INotifyPropertyChanged
         set => SetProperty(ref _marginV, value);
     }
 
+    public int? PosX
+    {
+        get => _posX;
+        set => SetProperty(ref _posX, value);
+    }
+
+    public int? PosY
+    {
+        get => _posY;
+        set => SetProperty(ref _posY, value);
+    }
+
     /// <summary>
     /// Dialogue type (Dialogue or Comment)
     /// </summary>
@@ -184,6 +198,8 @@ public class SubtitleLine : INotifyPropertyChanged
             MarginL = MarginL,
             MarginR = MarginR,
             MarginV = MarginV,
+            PosX = PosX,
+            PosY = PosY,
             Type = Type
         };
     }

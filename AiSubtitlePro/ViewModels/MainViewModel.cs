@@ -10,6 +10,8 @@ using System.Windows;
 
 using AiSubtitlePro.Infrastructure.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Globalization;
+using System.Text;
 
 namespace AiSubtitlePro.ViewModels;
 
@@ -66,6 +68,27 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string? _activeSubtitleText;
 
+    [ObservableProperty]
+    private string? _activeSubtitleAss;
+
+    [ObservableProperty]
+    private double _selectedStyleFontSize;
+
+    [ObservableProperty]
+    private string _selectedStylePrimaryAssColor = "&H00FFFFFF";
+
+    [ObservableProperty]
+    private string _selectedStyleOutlineAssColor = "&H00000000";
+
+    [ObservableProperty]
+    private string _selectedStyleBackAssColor = "&H80000000";
+
+    [ObservableProperty]
+    private double _selectedStyleOutline = 2;
+
+    [ObservableProperty]
+    private bool _selectedStyleBoxEnabled;
+
     public MainViewModel()
     {
         // Create new document on startup
@@ -99,13 +122,159 @@ public partial class MainViewModel : ObservableObject
             // Find all lines that overlap the current position
             var activeLines = CurrentDocument.Lines
                 .Where(l => value >= l.Start && value <= l.End)
-                .Select(l => l.Text)
                 .ToList();
 
             ActiveSubtitleText = activeLines.Count > 0 
-                ? string.Join("\n", activeLines) 
+                ? string.Join("\n", activeLines.Select(l => l.Text)) 
                 : string.Empty;
+
+            ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
         }
+    }
+
+    partial void OnSelectedLineChanged(SubtitleLine? value)
+    {
+        SyncSelectedStyleFromLine();
+    }
+
+    partial void OnSelectedStyleFontSizeChanged(double value)
+    {
+        UpdateSelectedStyle(s => s.FontSize = value);
+    }
+
+    partial void OnSelectedStylePrimaryAssColorChanged(string value)
+    {
+        UpdateSelectedStyle(s => s.PrimaryColor = SubtitleStyle.AssToColor(value));
+    }
+
+    partial void OnSelectedStyleOutlineAssColorChanged(string value)
+    {
+        UpdateSelectedStyle(s => s.OutlineColor = SubtitleStyle.AssToColor(value));
+    }
+
+    partial void OnSelectedStyleBackAssColorChanged(string value)
+    {
+        UpdateSelectedStyle(s => s.BackColor = SubtitleStyle.AssToColor(value));
+    }
+
+    partial void OnSelectedStyleOutlineChanged(double value)
+    {
+        UpdateSelectedStyle(s => s.Outline = value);
+    }
+
+    partial void OnSelectedStyleBoxEnabledChanged(bool value)
+    {
+        UpdateSelectedStyle(s => s.BorderStyle = value ? 3 : 1);
+    }
+
+    private void SyncSelectedStyleFromLine()
+    {
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        if (doc == null || line == null) return;
+
+        var style = doc.GetStyle(line.StyleName);
+        SelectedStyleFontSize = style.FontSize;
+        SelectedStyleOutline = style.Outline;
+        SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(style.PrimaryColor);
+        SelectedStyleOutlineAssColor = SubtitleStyle.ColorToAss(style.OutlineColor);
+        SelectedStyleBackAssColor = SubtitleStyle.ColorToAss(style.BackColor);
+        SelectedStyleBoxEnabled = style.BorderStyle == 3;
+    }
+
+    private void UpdateSelectedStyle(Action<SubtitleStyle> mutator)
+    {
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        if (doc == null || line == null) return;
+
+        var style = doc.Styles.FirstOrDefault(s => s.Name == line.StyleName);
+        if (style == null)
+        {
+            style = new SubtitleStyle { Name = line.StyleName };
+            doc.Styles.Add(style);
+        }
+
+        mutator(style);
+        doc.IsDirty = true;
+
+        // Refresh preview for current position
+        OnCurrentPositionChanged(CurrentPosition);
+    }
+
+    private static string BuildAssForPreview(SubtitleDocument doc, List<SubtitleLine> activeLines)
+    {
+        if (activeLines.Count == 0)
+            return string.Empty;
+
+        var stylesToInclude = activeLines
+            .Select(l => l.StyleName)
+            .Distinct(StringComparer.Ordinal)
+            .Select(doc.GetStyle)
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[Script Info]");
+        sb.AppendLine("ScriptType: v4.00+");
+        sb.AppendLine($"PlayResX: {doc.ScriptInfo.PlayResX}");
+        sb.AppendLine($"PlayResY: {doc.ScriptInfo.PlayResY}");
+        sb.AppendLine("WrapStyle: 0");
+        sb.AppendLine("ScaledBorderAndShadow: yes");
+        sb.AppendLine();
+
+        sb.AppendLine("[V4+ Styles]");
+        sb.AppendLine("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding");
+        foreach (var st in stylesToInclude)
+        {
+            // Force box mode if desired by style.BorderStyle
+            sb.AppendLine(string.Format(CultureInfo.InvariantCulture,
+                "Style: {0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}",
+                st.Name,
+                st.FontName,
+                st.FontSize,
+                SubtitleStyle.ColorToAss(st.PrimaryColor),
+                SubtitleStyle.ColorToAss(st.SecondaryColor),
+                SubtitleStyle.ColorToAss(st.OutlineColor),
+                SubtitleStyle.ColorToAss(st.BackColor),
+                st.Bold ? -1 : 0,
+                st.Italic ? -1 : 0,
+                st.Underline ? -1 : 0,
+                st.StrikeOut ? -1 : 0,
+                st.ScaleX,
+                st.ScaleY,
+                st.Spacing,
+                st.Angle,
+                st.BorderStyle,
+                st.Outline,
+                st.Shadow,
+                st.Alignment,
+                st.MarginL,
+                st.MarginR,
+                st.MarginV,
+                st.Encoding));
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("[Events]");
+        sb.AppendLine("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
+        foreach (var l in activeLines)
+        {
+            var text = (l.Text ?? string.Empty)
+                .Replace("\r\n", "\\N")
+                .Replace("\n", "\\N")
+                .Replace("\r", "\\N");
+
+            var overrideTags = string.Empty;
+            if (l.PosX.HasValue && l.PosY.HasValue)
+            {
+                overrideTags = $"{{\\pos({l.PosX.Value},{l.PosY.Value})}}";
+            }
+
+            // For preview, we keep dialogue always-on.
+            sb.AppendLine($"Dialogue: {l.Layer},0:00:00.00,9:59:59.99,{l.StyleName},{l.Actor},{l.MarginL},{l.MarginR},{l.MarginV},{l.Effect},{overrideTags}{text}");
+        }
+
+        return sb.ToString();
     }
 
     #region File Commands

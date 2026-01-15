@@ -14,7 +14,7 @@
         <!-- Video Surface -->
         <Grid Grid.Row="0" Background="Black">
             <!-- New Image-based display for LibAss rendering -->
-            <Image x:Name="VideoImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="Linear" />
+            <Image x:Name="VideoImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="Linear" MouseLeftButtonDown="VideoImage_MouseLeftButtonDown" />
 
             <!-- Loading/No Media Overlay -->
             <Border x:Name="NoMediaOverlay" Background="#AA000000">

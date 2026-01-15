@@ -21,6 +21,21 @@ public partial class MainWindow : Window
         // Sync video position with ViewModel
         VideoPlayer.PositionChanged += VideoPlayer_PositionChanged;
         VideoPlayer.MediaLoaded += VideoPlayer_MediaLoaded;
+        VideoPlayer.VideoClicked += VideoPlayer_VideoClicked;
+    }
+
+    private void VideoPlayer_VideoClicked(object? sender, (int X, int Y) e)
+    {
+        var vm = ViewModel;
+        if (vm?.SelectedLine == null || vm.CurrentDocument == null) return;
+
+        vm.SelectedLine.PosX = e.X;
+        vm.SelectedLine.PosY = e.Y;
+        vm.CurrentDocument.IsDirty = true;
+        vm.StatusMessage = $"Subtitle position set: ({e.X}, {e.Y})";
+
+        // Force preview refresh at current position
+        vm.CurrentPosition = vm.CurrentPosition;
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e)
