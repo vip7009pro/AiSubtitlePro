@@ -134,7 +134,11 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         if (_pendingScrubValueMs is not double ms) return;
         _pendingScrubValueMs = null;
 
-        SeekTo(TimeSpan.FromMilliseconds(ms));
+        var t = TimeSpan.FromMilliseconds(ms);
+        SeekTo(t);
+        Position = t;
+        UpdateTimeDisplay();
+        PositionChanged?.Invoke(this, t);
     }
 
     private static bool IsFromThumb(DependencyObject? source)
@@ -405,7 +409,11 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         _isDragging = false;
         _scrubTimer?.Stop();
         _pendingScrubValueMs = null;
-        SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
+        var t = TimeSpan.FromMilliseconds(TimelineSlider.Value);
+        SeekTo(t);
+        Position = t;
+        UpdateTimeDisplay();
+        PositionChanged?.Invoke(this, t);
     }
 
     private void TimelineSlider_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
