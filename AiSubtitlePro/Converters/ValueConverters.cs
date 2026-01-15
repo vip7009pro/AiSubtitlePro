@@ -19,7 +19,7 @@ public class NullToVisibilityConverter : IValueConverter
         
         if (invert)
             isNull = !isNull;
-            
+        
         return isNull ? Visibility.Collapsed : Visibility.Visible;
     }
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

@@ -20,6 +20,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private bool _isDragging;
     private bool _isDisposed;
 
+    private DispatcherTimer? _scrubTimer;
+    private double? _pendingScrubValueMs;
+
     private static string LogPath => Path.Combine(Path.GetTempPath(), "AiSubtitlePro.VideoPreview.log");
 
     private static void Log(string message)
@@ -116,6 +119,22 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         TimelineSlider.AddHandler(Thumb.DragCompletedEvent,
             new DragCompletedEventHandler(TimelineSlider_DragCompleted),
             true);
+
+        _scrubTimer = new DispatcherTimer
+        {
+            // Throttle scrubbing to avoid decoding on every mouse move.
+            Interval = TimeSpan.FromMilliseconds(80)
+        };
+        _scrubTimer.Tick += ScrubTimer_Tick;
+    }
+
+    private void ScrubTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_isDragging) return;
+        if (_pendingScrubValueMs is not double ms) return;
+        _pendingScrubValueMs = null;
+
+        SeekTo(TimeSpan.FromMilliseconds(ms));
     }
 
     private static bool IsFromThumb(DependencyObject? source)
@@ -377,11 +396,15 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void TimelineSlider_DragStarted(object sender, DragStartedEventArgs e)
     {
         _isDragging = true;
+        _pendingScrubValueMs = null;
+        _scrubTimer?.Start();
     }
 
     private void TimelineSlider_DragCompleted(object sender, DragCompletedEventArgs e)
     {
         _isDragging = false;
+        _scrubTimer?.Stop();
+        _pendingScrubValueMs = null;
         SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
     }
 
@@ -399,8 +422,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             var newTime = TimeSpan.FromMilliseconds(e.NewValue);
             Position = newTime;
             UpdateTimeDisplay();
-            // Do not SeekTo on every drag step (very expensive with FFmpeg decode).
-            // We seek once on DragCompleted.
+            // Live scrubbing: throttle decode/seek while dragging.
+            _pendingScrubValueMs = e.NewValue;
         }
     }
 
