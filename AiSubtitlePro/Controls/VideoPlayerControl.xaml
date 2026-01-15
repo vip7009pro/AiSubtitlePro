@@ -61,7 +61,7 @@
                        VerticalAlignment="Center" Margin="12,0"
                        Minimum="0" Maximum="100" Value="0"
                        IsMoveToPointEnabled="True"
-                       PreviewMouseDown="TimelineSlider_PreviewMouseDown"
+                       PreviewMouseLeftButtonDown="TimelineSlider_PreviewMouseDown"
                        PreviewMouseUp="TimelineSlider_PreviewMouseUp"
                        ValueChanged="TimelineSlider_ValueChanged" />
 

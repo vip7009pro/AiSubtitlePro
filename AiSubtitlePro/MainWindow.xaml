@@ -238,7 +238,7 @@
                     <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="Transparent" />
 
                     <!-- Edit Panel (Moved here) -->
-                    <Border Grid.Row="2" Background="#252526" CornerRadius="4" Padding="8">
+                    <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}" CornerRadius="4" Padding="8">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" /> <!-- Controls -->
@@ -278,21 +278,26 @@
                                 <WrapPanel Margin="0,8,0,0">
                                     <TextBlock Text="Font" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="55" Text="{Binding SelectedStyleFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Font Size"/>
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Font Size"
+                                             Background="#121212" Foreground="White" CaretBrush="White"/>
 
                                     <TextBlock Text="Color" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="95" Text="{Binding SelectedStylePrimaryAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Primary (&amp;H...)"/>
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Primary (&amp;H...)"
+                                             Background="#121212" Foreground="White" CaretBrush="White"/>
 
                                     <TextBlock Text="Stroke" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="45" Text="{Binding SelectedStyleOutline, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,6,0" ToolTip="Outline"/>
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,6,0" ToolTip="Outline"
+                                             Background="#121212" Foreground="White" CaretBrush="White"/>
                                     <TextBox Width="95" Text="{Binding SelectedStyleOutlineAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="OutlineColor (&amp;H...)"/>
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="OutlineColor (&amp;H...)"
+                                             Background="#121212" Foreground="White" CaretBrush="White"/>
 
                                     <TextBlock Text="Box" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Width="95" Text="{Binding SelectedStyleBackAssColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="BackColor (&amp;H...)"/>
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="BackColor (&amp;H...)"
+                                             Background="#121212" Foreground="White" CaretBrush="White"/>
                                     <CheckBox Content="Enable" IsChecked="{Binding SelectedStyleBoxEnabled, Mode=TwoWay}" VerticalAlignment="Center"/>
                                 </WrapPanel>
 
@@ -315,8 +320,8 @@
                                      VerticalScrollBarVisibility="Auto"
                                      FontSize="16"
                                      FontFamily="Segoe UI"
-                                     Background="#1E1E1E"
-                                     Foreground="White"
+                                     Background="#121212"
+                                     Foreground="#F1F1F1"
                                      CaretBrush="White"
                                      Padding="8" 
                                      Style="{StaticResource MaterialDesignOutlinedTextBox}"/>

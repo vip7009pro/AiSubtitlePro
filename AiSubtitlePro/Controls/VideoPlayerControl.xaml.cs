@@ -167,9 +167,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         {
             Log($"VideoPlayerControl: LoadMedia start. path='{path}' exists={File.Exists(path)}");
             _videoEngine.LoadMedia(path);
-            _videoEngine.Play();
 
-            Log("VideoPlayerControl: LoadMedia success; playback started.");
+            Log("VideoPlayerControl: LoadMedia success; playback ready (not auto-playing).");
 
             // Sync slider range to media duration
             TimelineSlider.Minimum = 0;
@@ -312,9 +311,21 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         }
 
         var p = e.GetPosition(slider);
-        var ratio = slider.ActualWidth > 0 ? (p.X / slider.ActualWidth) : 0;
-        ratio = Math.Clamp(ratio, 0, 1);
-        var value = slider.Minimum + ratio * (slider.Maximum - slider.Minimum);
+        double value;
+
+        // Prefer template track mapping if available (more accurate than width ratio)
+        if (slider.Template?.FindName("PART_Track", slider) is Track track)
+        {
+            value = track.ValueFromPoint(p);
+        }
+        else
+        {
+            var ratio = slider.ActualWidth > 0 ? (p.X / slider.ActualWidth) : 0;
+            ratio = Math.Clamp(ratio, 0, 1);
+            value = slider.Minimum + ratio * (slider.Maximum - slider.Minimum);
+        }
+
+        value = Math.Clamp(value, slider.Minimum, slider.Maximum);
         slider.Value = value;
 
         _isDragging = false;
@@ -325,7 +336,10 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void TimelineSlider_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         _isDragging = false;
-        SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
+        // No-op if this was a simple click-to-seek (already applied in mouse down).
+        // If user was dragging the thumb, this will land on the final position.
+        if (e.OriginalSource is Thumb)
+            SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
     }
 
     private void TimelineSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

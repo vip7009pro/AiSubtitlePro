@@ -34,8 +34,7 @@ public partial class MainWindow : Window
         vm.CurrentDocument.IsDirty = true;
         vm.StatusMessage = $"Subtitle position set: ({e.X}, {e.Y})";
 
-        // Force preview refresh at current position
-        vm.CurrentPosition = vm.CurrentPosition;
+        vm.RefreshSubtitlePreview();
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e)

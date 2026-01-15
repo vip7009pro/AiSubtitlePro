@@ -9,7 +9,6 @@ using System.IO;
 using System.Windows;
 
 using AiSubtitlePro.Infrastructure.Media;
-using CommunityToolkit.Mvvm.ComponentModel;
 using System.Globalization;
 using System.Text;
 
@@ -65,6 +64,8 @@ public partial class MainViewModel : ObservableObject
     /// </summary>
     public ObservableCollection<string> RecentFiles { get; } = new();
 
+    private SubtitleLine? _selectedLineHook;
+
     [ObservableProperty]
     private string? _activeSubtitleText;
 
@@ -119,9 +120,11 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument != null)
         {
+            var eps = TimeSpan.FromMilliseconds(25);
+
             // Find all lines that overlap the current position
             var activeLines = CurrentDocument.Lines
-                .Where(l => value >= l.Start && value <= l.End)
+                .Where(l => (value + eps) >= l.Start && (value - eps) <= l.End)
                 .ToList();
 
             ActiveSubtitleText = activeLines.Count > 0 
@@ -134,7 +137,34 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedLineChanged(SubtitleLine? value)
     {
+        if (_selectedLineHook != null)
+            _selectedLineHook.PropertyChanged -= SelectedLine_PropertyChanged;
+
+        _selectedLineHook = value;
+        if (_selectedLineHook != null)
+            _selectedLineHook.PropertyChanged += SelectedLine_PropertyChanged;
+
         SyncSelectedStyleFromLine();
+        RefreshSubtitlePreview();
+    }
+
+    private void SelectedLine_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        // Ensure edits (text/style name/pos/timing) reflect immediately on preview
+        if (e.PropertyName == nameof(SubtitleLine.Text)
+            || e.PropertyName == nameof(SubtitleLine.StyleName)
+            || e.PropertyName == nameof(SubtitleLine.PosX)
+            || e.PropertyName == nameof(SubtitleLine.PosY)
+            || e.PropertyName == nameof(SubtitleLine.Start)
+            || e.PropertyName == nameof(SubtitleLine.End))
+        {
+            RefreshSubtitlePreview();
+        }
+    }
+
+    public void RefreshSubtitlePreview()
+    {
+        OnCurrentPositionChanged(CurrentPosition);
     }
 
     partial void OnSelectedStyleFontSizeChanged(double value)
