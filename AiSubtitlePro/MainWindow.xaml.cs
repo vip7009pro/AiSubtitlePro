@@ -24,6 +24,63 @@ public partial class MainWindow : Window
         VideoPlayer.PositionChanged += VideoPlayer_PositionChanged;
         VideoPlayer.MediaLoaded += VideoPlayer_MediaLoaded;
         VideoPlayer.VideoClicked += VideoPlayer_VideoClicked;
+
+        AddHandler(System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            new System.Windows.Input.KeyEventHandler(MainWindow_PreviewKeyDown),
+            true);
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        var vm = ViewModel;
+        if (vm == null) return;
+
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0)
+            return;
+
+        if (e.Key == System.Windows.Input.Key.P)
+        {
+            if (VideoPlayer.IsPlaying) VideoPlayer.Pause();
+            else VideoPlayer.Play();
+            e.Handled = true;
+            return;
+        }
+
+        if (vm.SelectedLine == null) return;
+
+        if (e.Key == System.Windows.Input.Key.D1)
+        {
+            VideoPlayer.SeekTo(vm.SelectedLine.Start);
+            vm.CurrentPosition = vm.SelectedLine.Start;
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == System.Windows.Input.Key.D2)
+        {
+            VideoPlayer.SeekTo(vm.SelectedLine.End);
+            vm.CurrentPosition = vm.SelectedLine.End;
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == System.Windows.Input.Key.D3)
+        {
+            vm.SelectedLine.Start = vm.CurrentPosition;
+            vm.CurrentDocument!.IsDirty = true;
+            vm.RefreshSubtitlePreview();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == System.Windows.Input.Key.D4)
+        {
+            vm.SelectedLine.End = vm.CurrentPosition;
+            vm.CurrentDocument!.IsDirty = true;
+            vm.RefreshSubtitlePreview();
+            e.Handled = true;
+            return;
+        }
     }
 
     private void VideoPlayer_VideoClicked(object? sender, (int X, int Y) e)
@@ -45,6 +102,7 @@ public partial class MainWindow : Window
         {
             if (ViewModel == null) return;
             ViewModel.SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(color);
+            ViewModel.RefreshSubtitlePreview();
         });
     }
 
@@ -54,6 +112,7 @@ public partial class MainWindow : Window
         {
             if (ViewModel == null) return;
             ViewModel.SelectedStyleOutlineAssColor = SubtitleStyle.ColorToAss(color);
+            ViewModel.RefreshSubtitlePreview();
         });
     }
 
@@ -63,6 +122,7 @@ public partial class MainWindow : Window
         {
             if (ViewModel == null) return;
             ViewModel.SelectedStyleBackAssColor = SubtitleStyle.ColorToAss(color);
+            ViewModel.RefreshSubtitlePreview();
         });
     }
 

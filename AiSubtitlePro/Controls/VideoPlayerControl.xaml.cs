@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace AiSubtitlePro.Controls;
@@ -107,6 +108,25 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         TimelineSlider.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,
             new MouseButtonEventHandler(TimelineSlider_PreviewMouseDown),
             true);
+
+        // Preserve thumb dragging even when we attach handledEventsToo handlers.
+        TimelineSlider.AddHandler(Thumb.DragStartedEvent,
+            new DragStartedEventHandler(TimelineSlider_DragStarted),
+            true);
+        TimelineSlider.AddHandler(Thumb.DragCompletedEvent,
+            new DragCompletedEventHandler(TimelineSlider_DragCompleted),
+            true);
+    }
+
+    private static bool IsFromThumb(DependencyObject? source)
+    {
+        var current = source;
+        while (current != null)
+        {
+            if (current is Thumb) return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private void InitializeEngine()
@@ -309,23 +329,39 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
         // Click-to-seek: jump immediately to clicked position.
         // If the user grabs the thumb, let normal dragging work.
-        if (e.OriginalSource is Thumb)
+        if (IsFromThumb(e.OriginalSource as DependencyObject))
         {
-            _isDragging = true;
             return;
         }
 
-        var p = e.GetPosition(slider);
+        var pSlider = e.GetPosition(slider);
         double value;
 
         // Prefer template track mapping if available (more accurate than width ratio)
         if (slider.Template?.FindName("PART_Track", slider) is Track track)
         {
-            value = track.ValueFromPoint(p);
+            var pTrack = e.GetPosition(track);
+            // Clamp to track bounds to avoid unstable values when clicking near/after edges.
+            pTrack = new Point(Math.Clamp(pTrack.X, 0, track.ActualWidth), Math.Clamp(pTrack.Y, 0, track.ActualHeight));
+
+            // Manual linear mapping (more stable than Track.ValueFromPoint with templated sliders).
+            var range = slider.Maximum - slider.Minimum;
+            if (range <= 0 || track.ActualWidth <= 0)
+            {
+                value = slider.Minimum;
+            }
+            else
+            {
+                var thumbWidth = track.Thumb?.ActualWidth ?? 0;
+                var usableWidth = Math.Max(1.0, track.ActualWidth - thumbWidth);
+                var ratio = (pTrack.X - (thumbWidth / 2.0)) / usableWidth;
+                ratio = Math.Clamp(ratio, 0, 1);
+                value = slider.Minimum + (ratio * range);
+            }
         }
         else
         {
-            var ratio = slider.ActualWidth > 0 ? (p.X / slider.ActualWidth) : 0;
+            var ratio = slider.ActualWidth > 0 ? (pSlider.X / slider.ActualWidth) : 0;
             ratio = Math.Clamp(ratio, 0, 1);
             value = slider.Minimum + ratio * (slider.Maximum - slider.Minimum);
         }
@@ -338,13 +374,22 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         e.Handled = true;
     }
 
+    private void TimelineSlider_DragStarted(object sender, DragStartedEventArgs e)
+    {
+        _isDragging = true;
+    }
+
+    private void TimelineSlider_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        _isDragging = false;
+        SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
+    }
+
     private void TimelineSlider_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         _isDragging = false;
         // No-op if this was a simple click-to-seek (already applied in mouse down).
-        // If user was dragging the thumb, this will land on the final position.
-        if (e.OriginalSource is Thumb)
-            SeekTo(TimeSpan.FromMilliseconds(TimelineSlider.Value));
+        // If user was dragging the thumb, DragCompleted will seek once.
     }
 
     private void TimelineSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -354,7 +399,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             var newTime = TimeSpan.FromMilliseconds(e.NewValue);
             Position = newTime;
             UpdateTimeDisplay();
-            SeekTo(newTime);
+            // Do not SeekTo on every drag step (very expensive with FFmpeg decode).
+            // We seek once on DragCompleted.
         }
     }
 

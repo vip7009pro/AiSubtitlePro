@@ -6,6 +6,7 @@
     <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
     <converters:InverseBoolConverter x:Key="InverseBoolConverter" />
+    <converters:AssColorToBrushConverter x:Key="AssColorToBrushConverter" />
 
     <!-- Color Palette -->
     <Color x:Key="PrimaryColor">#2196F3</Color>

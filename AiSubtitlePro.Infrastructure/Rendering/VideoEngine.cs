@@ -15,6 +15,8 @@ public unsafe class VideoEngine : IDisposable
     private readonly AssRenderer? _assRenderer;
     private readonly FfmpegVideoDecoder _decoder;
 
+    private readonly object _renderLock = new();
+
     private WriteableBitmap? _writeableBitmap;
     private IntPtr _videoFrameBuffer;
     private IntPtr _compositedBuffer;
@@ -78,8 +80,17 @@ public unsafe class VideoEngine : IDisposable
 
     public void SetSubtitleContent(string content)
     {
-        _assRenderer?.SetContent(content);
-        RenderCurrentFrameWithSubtitles();
+        if (_assRenderer == null) return;
+
+        lock (_renderLock)
+        {
+            _assRenderer.SetContent(content);
+        }
+
+        // When playing, let the playback loop render subtitles on the next frame.
+        // When paused, re-blend on the current cached frame for instant preview.
+        if (!_isPlaying)
+            RenderCurrentFrameWithSubtitles();
     }
 
     private void RenderCurrentFrameWithSubtitles()
@@ -89,17 +100,20 @@ public unsafe class VideoEngine : IDisposable
             if (_writeableBitmap == null) return;
             if (_videoFrameBuffer == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
 
-            // Start from last decoded frame
-            Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
-
-            // Render subtitles at current editor position (do not advance video)
-            var subTime = Position;
-            if (_assRenderer != null)
+            lock (_renderLock)
             {
-                bool changed;
-                IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
-                if (imgPtr != IntPtr.Zero)
-                    BlendSubtitles(imgPtr);
+                // Start from last decoded frame
+                Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+
+                // Render subtitles at current editor position (do not advance video)
+                var subTime = Position;
+                if (_assRenderer != null)
+                {
+                    bool changed;
+                    IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
+                    if (imgPtr != IntPtr.Zero)
+                        BlendSubtitles(imgPtr);
+                }
             }
 
             _uiDispatcher?.BeginInvoke(() =>
@@ -213,23 +227,26 @@ public unsafe class VideoEngine : IDisposable
         pts = TimeSpan.Zero;
         if (_writeableBitmap == null) return false;
 
-        if (!_decoder.TryDecodeNextFrame(out pts))
-            return false;
-
-        // Copy decoded BGRA into cached video frame + composited buffer
-        Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_videoFrameBuffer, (long)(_stride * _height), (long)(_stride * _height));
-        Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
-
-        // Render and blend subtitles for current timestamp
-        // When not playing (seek/scrub/edit), use the requested editor Position to avoid pts drift.
-        var subTime = (_isPlaying && pts != TimeSpan.Zero) ? pts : Position;
-        if (_assRenderer != null)
+        lock (_renderLock)
         {
-            bool changed;
-            IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
-            if (imgPtr != IntPtr.Zero)
+            if (!_decoder.TryDecodeNextFrame(out pts))
+                return false;
+
+            // Copy decoded BGRA into cached video frame + composited buffer
+            Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_videoFrameBuffer, (long)(_stride * _height), (long)(_stride * _height));
+            Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+
+            // Render and blend subtitles for current timestamp
+            // When not playing (seek/scrub/edit), use the requested editor Position to avoid pts drift.
+            var subTime = (_isPlaying && pts != TimeSpan.Zero) ? pts : Position;
+            if (_assRenderer != null)
             {
-                BlendSubtitles(imgPtr);
+                bool changed;
+                IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
+                if (imgPtr != IntPtr.Zero)
+                {
+                    BlendSubtitles(imgPtr);
+                }
             }
         }
 

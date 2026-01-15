@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Media;
+using AiSubtitlePro.Core.Models;
 
 namespace AiSubtitlePro.Converters;
 
@@ -20,7 +22,6 @@ public class NullToVisibilityConverter : IValueConverter
             
         return isNull ? Visibility.Collapsed : Visibility.Visible;
     }
-
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
     {
         throw new NotImplementedException();
@@ -62,5 +63,23 @@ public class InverseBoolConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value is bool b ? !b : false;
+    }
+}
+
+public class AssColorToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var s = value?.ToString();
+        if (string.IsNullOrWhiteSpace(s))
+            return Brushes.Transparent;
+
+        var c = SubtitleStyle.AssToColor(s);
+        return new SolidColorBrush(Color.FromArgb(c.A, c.R, c.G, c.B));
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return Binding.DoNothing;
     }
 }

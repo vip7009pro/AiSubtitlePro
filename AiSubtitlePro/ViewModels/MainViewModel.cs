@@ -120,11 +120,20 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument != null)
         {
-            var eps = TimeSpan.FromMilliseconds(25);
-
-            // Find all lines that overlap the current position
+            // Stable overlap rule (Aegisub-style): Start inclusive, End exclusive.
+            // This avoids flickering/alternating visibility when scrubbing on boundaries.
             var activeLines = CurrentDocument.Lines
-                .Where(l => (value + eps) >= l.Start && (value - eps) <= l.End)
+                .Where(l =>
+                {
+                    if (l.End <= l.Start)
+                    {
+                        // Degenerate/invalid line: treat as a point event with a tiny tolerance.
+                        var tol = TimeSpan.FromMilliseconds(1);
+                        return value >= (l.Start - tol) && value <= (l.End + tol);
+                    }
+
+                    return value >= l.Start && value < l.End;
+                })
                 .ToList();
 
             ActiveSubtitleText = activeLines.Count > 0 

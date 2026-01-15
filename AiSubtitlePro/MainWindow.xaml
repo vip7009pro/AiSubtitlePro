@@ -282,6 +282,8 @@
                                              Background="White" Foreground="#111111" CaretBrush="#111111"/>
 
                                     <TextBlock Text="Color" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
+                                            Background="{Binding SelectedStylePrimaryAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
                                     <Button Content="Pick" Click="PickPrimaryColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
                                     <TextBlock Text="{Binding SelectedStylePrimaryAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
 
@@ -289,10 +291,14 @@
                                     <TextBox Width="45" Text="{Binding SelectedStyleOutline, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
                                              Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,6,0" ToolTip="Outline"
                                              Background="White" Foreground="#111111" CaretBrush="#111111"/>
+                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
+                                            Background="{Binding SelectedStyleOutlineAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
                                     <Button Content="Pick" Click="PickOutlineColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
                                     <TextBlock Text="{Binding SelectedStyleOutlineAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
 
                                     <TextBlock Text="Box" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
+                                            Background="{Binding SelectedStyleBackAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
                                     <Button Content="Pick" Click="PickBackColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
                                     <TextBlock Text="{Binding SelectedStyleBackAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
                                     <CheckBox Content="Enable" IsChecked="{Binding SelectedStyleBoxEnabled, Mode=TwoWay}" VerticalAlignment="Center"/>
@@ -349,10 +355,13 @@
                     <!-- Subtitle DataGrid -->
                     <DataGrid x:Name="SubtitleGrid" Grid.Row="1"
                              ItemsSource="{Binding DisplayedLines}"
-                             SelectedItem="{Binding SelectedLine}"
+                             SelectedItem="{Binding SelectedLine, Mode=TwoWay}"
+                             IsSynchronizedWithCurrentItem="True"
                              Style="{StaticResource SubtitleGridStyle}"
                              RowStyle="{StaticResource SubtitleGridRowStyle}"
                              CellStyle="{StaticResource SubtitleGridCellStyle}"
+                             SelectionMode="Extended"
+                             SelectionUnit="FullRow"
                              PreviewKeyDown="SubtitleGrid_PreviewKeyDown"
                              SelectionChanged="SubtitleGrid_SelectionChanged">
                         <DataGrid.Columns>
