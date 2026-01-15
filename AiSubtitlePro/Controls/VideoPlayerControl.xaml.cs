@@ -6,7 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Threading;
+using AiSubtitlePro.Infrastructure.Media;
 
 namespace AiSubtitlePro.Controls;
 
@@ -16,12 +16,15 @@ namespace AiSubtitlePro.Controls;
 public partial class VideoPlayerControl : UserControl, IDisposable
 {
     private AiSubtitlePro.Infrastructure.Rendering.VideoEngine? _videoEngine;
-    private DispatcherTimer? _positionTimer;
+    private bool _isRenderingAttached;
     private bool _isDragging;
     private bool _isDisposed;
 
-    private DispatcherTimer? _scrubTimer;
-    private double? _pendingScrubValueMs;
+    // No timer-based scrubbing in audio-master model.
+
+    private AudioPlaybackClock? _audioClock;
+
+    private bool _isMuted;
 
     private static string LogPath => Path.Combine(Path.GetTempPath(), "AiSubtitlePro.VideoPreview.log");
 
@@ -120,25 +123,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             new DragCompletedEventHandler(TimelineSlider_DragCompleted),
             true);
 
-        _scrubTimer = new DispatcherTimer
-        {
-            // Throttle scrubbing to avoid decoding on every mouse move.
-            Interval = TimeSpan.FromMilliseconds(80)
-        };
-        _scrubTimer.Tick += ScrubTimer_Tick;
-    }
-
-    private void ScrubTimer_Tick(object? sender, EventArgs e)
-    {
-        if (!_isDragging) return;
-        if (_pendingScrubValueMs is not double ms) return;
-        _pendingScrubValueMs = null;
-
-        var t = TimeSpan.FromMilliseconds(ms);
-        SeekTo(t);
-        Position = t;
-        UpdateTimeDisplay();
-        PositionChanged?.Invoke(this, t);
+        // No timers for A/V sync. Rendering is driven by CompositionTarget.Rendering.
     }
 
     private static bool IsFromThumb(DependencyObject? source)
@@ -157,33 +142,66 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         try
         {
             _videoEngine = new AiSubtitlePro.Infrastructure.Rendering.VideoEngine();
-            
-            // Wire up events
-            _videoEngine.PositionChanged += (s, time) => {
-                 // Engine updates position
-            };
-            
-            _videoEngine.MediaEnded += (s, e) => {
-                 Dispatcher.Invoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
+            _audioClock = new AudioPlaybackClock();
+
+            _videoEngine.MediaEnded += (s, e) =>
+            {
+                Dispatcher.Invoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
             };
 
             // Bind Image
             VideoImage.Source = _videoEngine.VideoSource;
             Log("VideoPlayerControl: engine initialized; VideoImage.Source bound.");
 
-            // Position update timer (UI sync)
-            _positionTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(50)
-            };
-            _positionTimer.Tick += OnPositionTimerTick;
-            _positionTimer.Start();
+            AttachRenderLoop();
         }
         catch (Exception ex)
         {
             Log($"VideoPlayerControl: engine init error: {ex}");
             NoMediaOverlay.Visibility = Visibility.Visible;
         }
+    }
+
+    private void AttachRenderLoop()
+    {
+        if (_isRenderingAttached) return;
+        CompositionTarget.Rendering += CompositionTarget_Rendering;
+        _isRenderingAttached = true;
+    }
+
+    private void DetachRenderLoop()
+    {
+        if (!_isRenderingAttached) return;
+        CompositionTarget.Rendering -= CompositionTarget_Rendering;
+        _isRenderingAttached = false;
+    }
+
+    private void CompositionTarget_Rendering(object? sender, EventArgs e)
+    {
+        var engine = _videoEngine;
+        var audio = _audioClock;
+        if (engine == null || audio == null) return;
+        if (_isDragging) return;
+
+        // Audio device playback position is the master clock.
+        var t = audio.GetAudioTime();
+
+        engine.RenderAt(t);
+
+        Position = t;
+        Duration = engine.Duration;
+        IsPlaying = audio.IsPlaying;
+
+        // UI updates
+        var posMs = t.TotalMilliseconds;
+        var durMs = Duration.TotalMilliseconds;
+        if (durMs > 0 && Math.Abs(TimelineSlider.Maximum - durMs) > 0.5)
+            TimelineSlider.Maximum = durMs;
+        TimelineSlider.Value = posMs;
+
+        UpdatePlayPauseIcon();
+        UpdateTimeDisplay();
+        PositionChanged?.Invoke(this, t);
     }
 
     private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -216,6 +234,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             Log($"VideoPlayerControl: LoadMedia start. path='{path}' exists={File.Exists(path)}");
             _videoEngine.LoadMedia(path);
 
+            _audioClock?.Load(path);
+            ApplyAudioVolumeFromUi();
+
             Log("VideoPlayerControl: LoadMedia success; playback ready (not auto-playing).");
 
             // Sync slider range to media duration
@@ -239,14 +260,32 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     }
 
     // Playback proxies
-    public void Play() => _videoEngine?.Play();
-    public void Pause() => _videoEngine?.Pause();
-    public void Stop() => _videoEngine?.Stop();
+    public void Play()
+    {
+        _audioClock?.Play();
+    }
+
+    public void Pause()
+    {
+        _audioClock?.Pause();
+
+        // Re-render at current audio time for instant subtitle update.
+        var t = _audioClock?.GetAudioTime() ?? Position;
+        _videoEngine?.RenderAt(t);
+    }
+
+    public void Stop()
+    {
+        _audioClock?.Stop();
+        _videoEngine?.SeekTo(TimeSpan.Zero);
+    }
     
     public void SeekTo(TimeSpan position)
     {
          if (_videoEngine == null) return;
+         _audioClock?.Seek(position);
          _videoEngine.SeekTo(position);
+         _videoEngine.RenderAt(position);
     }
     
     public void SeekToFrame(bool forward)
@@ -260,26 +299,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
     // ... Events ...
 
-    private void OnPositionTimerTick(object? sender, EventArgs e)
-    {
-        var engine = _videoEngine;
-        if (engine == null || _isDragging) return;
-
-        var posMs = engine.Position.TotalMilliseconds;
-        var durMs = engine.Duration.TotalMilliseconds;
-        if (durMs > 0 && Math.Abs(TimelineSlider.Maximum - durMs) > 0.5)
-            TimelineSlider.Maximum = durMs;
-        TimelineSlider.Value = posMs;
-
-        Position = engine.Position;
-        Duration = engine.Duration;
-
-        IsPlaying = engine.IsPlaying;
-        UpdatePlayPauseIcon();
-        UpdateTimeDisplay();
-        
-        PositionChanged?.Invoke(this, Position);
-    }
+    // No timer-based clock in audio-master model.
     
     private void UpdateTimeDisplay()
     {
@@ -300,6 +320,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
     private void VideoImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // Require double-click to set subtitle position to avoid accidental changes.
+        if (e.ClickCount < 2) return;
+
         var engine = _videoEngine;
         if (engine == null) return;
         if (engine.VideoWidth <= 0 || engine.VideoHeight <= 0) return;
@@ -327,17 +350,29 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         VideoClicked?.Invoke(this, (xi, yi));
     }
 
+    private void ApplyAudioVolumeFromUi()
+    {
+        var audio = _audioClock;
+        if (audio == null) return;
+
+        var vol = _isMuted ? 0f : (float)Math.Clamp(VolumeSlider.Value / 100.0, 0, 1);
+        audio.SetVolume(vol);
+    }
+    private void CloseAudioClock()
+    {
+        try { _audioClock?.Dispose(); } catch { }
+        _audioClock = null;
+    }
+
     #region UI Event Handlers
 
     private void PlayPause_Click(object sender, RoutedEventArgs e)
     {
-        var engine = _videoEngine;
-        if (engine == null) return;
+        var audio = _audioClock;
+        if (audio == null) return;
 
-        if (engine.IsPlaying)
-            Pause();
-        else
-            Play();
+        if (audio.IsPlaying) Pause();
+        else Play();
             
         UpdatePlayPauseIcon();
     }
@@ -393,22 +428,19 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         slider.Value = value;
 
         _isDragging = false;
-        SeekTo(TimeSpan.FromMilliseconds(value));
+        var t = TimeSpan.FromMilliseconds(value);
+        SeekTo(t);
         e.Handled = true;
     }
 
     private void TimelineSlider_DragStarted(object sender, DragStartedEventArgs e)
     {
         _isDragging = true;
-        _pendingScrubValueMs = null;
-        _scrubTimer?.Start();
     }
 
     private void TimelineSlider_DragCompleted(object sender, DragCompletedEventArgs e)
     {
         _isDragging = false;
-        _scrubTimer?.Stop();
-        _pendingScrubValueMs = null;
         var t = TimeSpan.FromMilliseconds(TimelineSlider.Value);
         SeekTo(t);
         Position = t;
@@ -430,17 +462,16 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             var newTime = TimeSpan.FromMilliseconds(e.NewValue);
             Position = newTime;
             UpdateTimeDisplay();
-            // Live scrubbing: throttle decode/seek while dragging.
-            _pendingScrubValueMs = e.NewValue;
+            // Apply seek immediately on drag for instant subtitle update; frame drops are acceptable.
+            SeekTo(newTime);
         }
     }
 
     private void Mute_Click(object sender, RoutedEventArgs e)
     {
-        var engine = _videoEngine;
-        if (engine == null) return;
-        engine.IsMuted = !engine.IsMuted;
-        VolumeIcon.Kind = engine.IsMuted 
+        _isMuted = !_isMuted;
+        ApplyAudioVolumeFromUi();
+        VolumeIcon.Kind = _isMuted 
             ? MaterialDesignThemes.Wpf.PackIconKind.VolumeOff 
             : MaterialDesignThemes.Wpf.PackIconKind.VolumeHigh;
     }
@@ -450,6 +481,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         var engine = _videoEngine;
         if (engine != null)
             engine.Volume = (int)e.NewValue;
+
+        ApplyAudioVolumeFromUi();
     }
 
     #endregion
@@ -459,7 +492,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         if (_isDisposed) return;
         _isDisposed = true;
 
-        _positionTimer?.Stop();
+        DetachRenderLoop();
+        CloseAudioClock();
         _videoEngine?.Dispose();
     }
 }

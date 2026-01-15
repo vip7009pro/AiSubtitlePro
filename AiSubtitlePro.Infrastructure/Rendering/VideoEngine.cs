@@ -24,9 +24,8 @@ public unsafe class VideoEngine : IDisposable
     private int _height;
     private int _stride;
 
-    private CancellationTokenSource? _playbackCts;
-    private Task? _playbackTask;
-    private volatile bool _isPlaying;
+    // Audio-master model: VideoEngine has no internal clock.
+    // Rendering is driven by an external master time (audio device clock).
 
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? MediaEnded;
@@ -38,7 +37,7 @@ public unsafe class VideoEngine : IDisposable
 
     public TimeSpan Position { get; private set; }
     public TimeSpan Duration { get; private set; }
-    public bool IsPlaying => _isPlaying;
+    public bool IsPlaying => false;
     public int Volume { get; set; } = 100;
     public bool IsMuted { get; set; }
 
@@ -59,8 +58,6 @@ public unsafe class VideoEngine : IDisposable
 
     public void LoadMedia(string path)
     {
-        Stop();
-
         _decoder.Open(path);
 
         _width = _decoder.Width;
@@ -74,8 +71,16 @@ public unsafe class VideoEngine : IDisposable
 
         // Render first frame for immediate preview
         _decoder.Seek(TimeSpan.Zero);
-        if (!RenderSingleFrameInternal(out _))
+        _ptsPrev = TimeSpan.Zero;
+        _ptsCurr = TimeSpan.Zero;
+        if (!DecodeNextIntoCurrent(out _))
             throw new InvalidOperationException("Failed to decode first video frame.");
+
+        // Initialize prev frame to current for stable selection.
+        _ptsPrev = _ptsCurr;
+        Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+
+        RenderAt(TimeSpan.Zero);
     }
 
     public void SetSubtitleContent(string content)
@@ -87,75 +92,15 @@ public unsafe class VideoEngine : IDisposable
             _assRenderer.SetContent(content);
         }
 
-        // When playing, let the playback loop render subtitles on the next frame.
-        // When paused, re-blend on the current cached frame for instant preview.
-        if (!_isPlaying)
-            RenderCurrentFrameWithSubtitles();
+        // Audio-master model: re-render at current Position immediately (cheap; reuses cached frame).
+        RenderAt(Position);
     }
 
-    private void RenderCurrentFrameWithSubtitles()
-    {
-        try
-        {
-            if (_writeableBitmap == null) return;
-            if (_videoFrameBuffer == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
-
-            lock (_renderLock)
-            {
-                // Start from last decoded frame
-                Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
-
-                // Render subtitles at current editor position (do not advance video)
-                var subTime = Position;
-                if (_assRenderer != null)
-                {
-                    bool changed;
-                    IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
-                    if (imgPtr != IntPtr.Zero)
-                        BlendSubtitles(imgPtr);
-                }
-            }
-
-            _uiDispatcher?.BeginInvoke(() =>
-            {
-                if (_writeableBitmap == null) return;
-                _writeableBitmap.Lock();
-                _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
-                _writeableBitmap.Unlock();
-            });
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"RenderCurrentFrameWithSubtitles error: {ex}");
-        }
-    }
-
-    public void Play()
-    {
-        if (_isPlaying) return;
-        if (_width <= 0 || _height <= 0) return;
-
-        _isPlaying = true;
-        _playbackCts = new CancellationTokenSource();
-        _playbackTask = Task.Run(() => PlaybackLoop(_playbackCts.Token));
-    }
-
-    public void Pause()
-    {
-        if (!_isPlaying) return;
-        _isPlaying = false;
-        _playbackCts?.Cancel();
-    }
-
-    public void Stop()
-    {
-        _isPlaying = false;
-        _playbackCts?.Cancel();
-        _playbackCts = null;
-        _playbackTask = null;
-
-        Position = TimeSpan.Zero;
-    }
+    // Frame selection state (double buffer)
+    private IntPtr _framePrev;
+    private IntPtr _frameCurr;
+    private TimeSpan _ptsPrev;
+    private TimeSpan _ptsCurr;
 
     public void SeekTo(TimeSpan position)
     {
@@ -164,103 +109,97 @@ public unsafe class VideoEngine : IDisposable
 
         _decoder.Seek(position);
         Position = position;
-        RenderSingleFrame();
+
+        // Flush our selection buffers and decode one frame so RenderAt has something to show.
+        _ptsPrev = TimeSpan.Zero;
+        _ptsCurr = TimeSpan.Zero;
+        DecodeNextIntoCurrent(out _);
+        _ptsPrev = _ptsCurr;
+        Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+
+        RenderAt(position);
     }
 
-    private void PlaybackLoop(CancellationToken token)
+    /// <summary>
+    /// Audio-master rendering entry point.
+    /// Select the video frame with the closest PTS <= masterTime and render subtitles at masterTime.
+    /// Drops frames if needed to keep up.
+    /// </summary>
+    public void RenderAt(TimeSpan masterTime)
     {
-        // Best-effort fixed frame pacing (30fps) - can be improved by using PTS deltas.
-        var frameDelay = TimeSpan.FromMilliseconds(33);
+        if (_writeableBitmap == null) return;
+        if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
 
-        while (!token.IsCancellationRequested)
-        {
-            TimeSpan pts;
-            try
-            {
-                if (!RenderSingleFrameInternal(out pts))
-                {
-                    _isPlaying = false;
-                    _uiDispatcher?.BeginInvoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"PlaybackLoop error: {ex}");
-                _isPlaying = false;
-                _uiDispatcher?.BeginInvoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
-                return;
-            }
+        if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
+        if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
 
-            if (pts != TimeSpan.Zero)
-            {
-                Position = pts;
-            }
+        // Drive decode forward to masterTime.
+        EnsureDecodedUpTo(masterTime);
 
-            _uiDispatcher?.BeginInvoke(() => PositionChanged?.Invoke(this, Position));
-
-            try
-            {
-                Task.Delay(frameDelay, token).Wait(token);
-            }
-            catch
-            {
-                return;
-            }
-        }
-    }
-
-    private void RenderSingleFrame()
-    {
-        try
-        {
-            RenderSingleFrameInternal(out _);
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"RenderSingleFrame error: {ex}");
-        }
-    }
-
-    private bool RenderSingleFrameInternal(out TimeSpan pts)
-    {
-        pts = TimeSpan.Zero;
-        if (_writeableBitmap == null) return false;
+        Position = masterTime;
+        PositionChanged?.Invoke(this, Position);
 
         lock (_renderLock)
         {
-            if (!_decoder.TryDecodeNextFrame(out pts))
-                return false;
+            var usePrev = (_ptsCurr > masterTime) && (_ptsPrev != TimeSpan.Zero);
+            var src = usePrev ? _framePrev : _frameCurr;
 
-            // Copy decoded BGRA into cached video frame + composited buffer
-            Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_videoFrameBuffer, (long)(_stride * _height), (long)(_stride * _height));
-            Buffer.MemoryCopy((void*)_videoFrameBuffer, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+            Buffer.MemoryCopy((void*)src, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
 
-            // Render and blend subtitles for current timestamp
-            // When not playing (seek/scrub/edit), use the requested editor Position to avoid pts drift.
-            var subTime = (_isPlaying && pts != TimeSpan.Zero) ? pts : Position;
             if (_assRenderer != null)
             {
                 bool changed;
-                IntPtr imgPtr = _assRenderer.RenderFrame(subTime, out changed);
+                var imgPtr = _assRenderer.RenderFrame(masterTime, out changed);
                 if (imgPtr != IntPtr.Zero)
-                {
                     BlendSubtitles(imgPtr);
-                }
             }
         }
 
-        // Present in WPF
         _uiDispatcher?.BeginInvoke(() =>
         {
             if (_writeableBitmap == null) return;
-
             _writeableBitmap.Lock();
             _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
             _writeableBitmap.Unlock();
         });
+    }
 
-        return true;
+    private void EnsureDecodedUpTo(TimeSpan masterTime)
+    {
+        // Decode forward until current PTS >= masterTime (then we can choose prev or curr).
+        // If decode runs ahead, we will pick prev.
+        while (_ptsCurr < masterTime)
+        {
+            if (!DecodeNextIntoCurrent(out var pts))
+            {
+                MediaEnded?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
+            // shift current to prev (swap buffers)
+            var tmp = _framePrev;
+            _framePrev = _frameCurr;
+            _frameCurr = tmp;
+            _ptsPrev = _ptsCurr;
+            _ptsCurr = pts;
+
+            // Copy decoded BGRA into new current buffer
+            Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
+        }
+    }
+
+    private bool DecodeNextIntoCurrent(out TimeSpan pts)
+    {
+        pts = TimeSpan.Zero;
+        try
+        {
+            return _decoder.TryDecodeNextFrame(out pts);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"DecodeNextIntoCurrent error: {ex}");
+            return false;
+        }
     }
 
     private void RecreateBuffers()
@@ -277,7 +216,22 @@ public unsafe class VideoEngine : IDisposable
             _videoFrameBuffer = IntPtr.Zero;
         }
 
+        if (_framePrev != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_framePrev);
+            _framePrev = IntPtr.Zero;
+        }
+
+        if (_frameCurr != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_frameCurr);
+            _frameCurr = IntPtr.Zero;
+        }
+
+        // Keep the old field for backward compatibility, but use our own double buffers.
         _videoFrameBuffer = Marshal.AllocHGlobal(_stride * _height);
+        _framePrev = Marshal.AllocHGlobal(_stride * _height);
+        _frameCurr = Marshal.AllocHGlobal(_stride * _height);
         _compositedBuffer = Marshal.AllocHGlobal(_stride * _height);
 
         _uiDispatcher?.Invoke(() =>
@@ -371,8 +325,6 @@ public unsafe class VideoEngine : IDisposable
 
     public void Dispose()
     {
-        Stop();
-
         _assRenderer?.Dispose();
         _decoder.Dispose();
 
@@ -386,6 +338,18 @@ public unsafe class VideoEngine : IDisposable
         {
             Marshal.FreeHGlobal(_videoFrameBuffer);
             _videoFrameBuffer = IntPtr.Zero;
+        }
+
+        if (_framePrev != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_framePrev);
+            _framePrev = IntPtr.Zero;
+        }
+
+        if (_frameCurr != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_frameCurr);
+            _frameCurr = IntPtr.Zero;
         }
     }
 }

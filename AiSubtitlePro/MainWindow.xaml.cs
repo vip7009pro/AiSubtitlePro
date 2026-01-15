@@ -91,7 +91,7 @@ public partial class MainWindow : Window
         vm.SelectedLine.PosX = e.X;
         vm.SelectedLine.PosY = e.Y;
         vm.CurrentDocument.IsDirty = true;
-        vm.StatusMessage = $"Subtitle position set: ({e.X}, {e.Y})";
+        vm.StatusMessage = $"Subtitle position set (double-click): ({e.X}, {e.Y})";
 
         vm.RefreshSubtitlePreview();
     }

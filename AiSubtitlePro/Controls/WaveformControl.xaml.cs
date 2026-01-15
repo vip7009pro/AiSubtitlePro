@@ -16,6 +16,7 @@ public partial class WaveformControl : UserControl
 {
     private float[]? _waveformData;
     private readonly List<Rectangle> _subtitleMarkers = new();
+    private TimeSpan _audioDuration;
 
     #region Dependency Properties
 
@@ -72,6 +73,19 @@ public partial class WaveformControl : UserControl
         InitializeComponent();
         SizeChanged += OnSizeChanged;
         WaveformCanvas.MouseLeftButtonDown += OnCanvasClick;
+        Loaded += OnLoaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        // Ensure initial render after first layout pass.
+        if (_waveformData != null && _waveformData.Length > 0)
+        {
+            DrawWaveform();
+            DrawTimeRuler();
+            DrawSubtitleMarkers();
+            UpdatePlayhead();
+        }
     }
 
     private static void OnAudioPathChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -112,11 +126,24 @@ public partial class WaveformControl : UserControl
         {
             await Task.Run(() =>
             {
-                _waveformData = ExtractWaveformData(path);
+                (_waveformData, _audioDuration) = ExtractWaveformData(path);
             });
 
-            DrawWaveform();
-            DrawTimeRuler();
+            if (_waveformData == null || _waveformData.Length == 0)
+            {
+                NoAudioOverlay.Visibility = Visibility.Visible;
+                return;
+            }
+
+            // Draw after layout is ready; otherwise ActualWidth/Height can be 0 and nothing gets rendered.
+            await Dispatcher.InvokeAsync(() =>
+            {
+                NoAudioOverlay.Visibility = Visibility.Collapsed;
+                DrawWaveform();
+                DrawTimeRuler();
+                DrawSubtitleMarkers();
+                UpdatePlayhead();
+            }, System.Windows.Threading.DispatcherPriority.Loaded);
         }
         catch (Exception ex)
         {
@@ -125,9 +152,11 @@ public partial class WaveformControl : UserControl
         }
     }
 
-    private float[] ExtractWaveformData(string path)
+    private (float[] Data, TimeSpan AudioDuration) ExtractWaveformData(string path)
     {
         var data = new List<float>();
+        float globalMax = 0f;
+        TimeSpan audioDuration = TimeSpan.Zero;
 
         try
         {
@@ -137,24 +166,59 @@ public partial class WaveformControl : UserControl
 
             while ((samplesRead = reader.Read(sampleBuffer, 0, sampleBuffer.Length)) > 0)
             {
-                // Calculate RMS for each chunk
-                var sum = 0f;
+                // Use peak amplitude per chunk (more visible than RMS for waveform display)
+                var peak = 0f;
                 for (int i = 0; i < samplesRead; i++)
                 {
-                    sum += sampleBuffer[i] * sampleBuffer[i];
+                    var v = Math.Abs(sampleBuffer[i]);
+                    if (v > peak) peak = v;
                 }
-                var rms = (float)Math.Sqrt(sum / samplesRead);
-                data.Add(rms);
+                data.Add(peak);
+                if (peak > globalMax) globalMax = peak;
             }
 
-            Duration = reader.TotalTime;
+            audioDuration = reader.TotalTime;
         }
         catch
         {
             // Return empty on error
         }
 
-        return data.ToArray();
+        if (data.Count == 0)
+            return (Array.Empty<float>(), audioDuration);
+
+        // Normalize so quiet audio still draws visibly.
+        // Avoid divide-by-zero and avoid over-amplifying near-silence.
+        if (globalMax > 0.0001f)
+        {
+            for (int i = 0; i < data.Count; i++)
+            {
+                data[i] = Math.Clamp(data[i] / globalMax, 0f, 1f);
+            }
+        }
+
+        // Trim trailing silence so we don't show a long flat tail.
+        // Threshold tuned for normalized data.
+        const float silenceThreshold = 0.05f;
+        const int minSilentChunksToTrim = 3;
+
+        var lastNonSilent = data.Count - 1;
+        var silentCount = 0;
+        while (lastNonSilent >= 0 && data[lastNonSilent] < silenceThreshold)
+        {
+            silentCount++;
+            lastNonSilent--;
+        }
+
+        if (silentCount >= minSilentChunksToTrim && lastNonSilent > 0)
+        {
+            // Keep a tiny tail so the waveform doesn't look abruptly cut.
+            var keepTail = Math.Min(data.Count - 1, lastNonSilent + 1);
+            if (keepTail < data.Count - 1)
+                data.RemoveRange(keepTail + 1, data.Count - (keepTail + 1));
+        }
+
+        return (data.ToArray(), audioDuration);
     }
 
     private void DrawWaveform()
@@ -215,8 +279,9 @@ public partial class WaveformControl : UserControl
         var path = new System.Windows.Shapes.Path
         {
             Data = geometry,
-            Fill = new SolidColorBrush(Color.FromRgb(0x00, 0xBC, 0xD4)),
-            Opacity = 0.7
+            Stroke = new SolidColorBrush(Color.FromRgb(0x00, 0xBC, 0xD4)),
+            StrokeThickness = 1.0,
+            Opacity = 0.9
         };
 
         WaveformCanvas.Children.Add(path);

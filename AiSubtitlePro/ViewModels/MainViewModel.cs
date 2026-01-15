@@ -422,16 +422,13 @@ public partial class MainViewModel : ObservableObject
             StatusMessage = "Extracting audio for waveform...";
             var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
             Directory.CreateDirectory(tempDir);
-            
-            var wavPath = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(videoPath) + ".wav");
-            
-            // Extract if not exists or if checking logic needed. 
-            // For now, simple extract.
-            if (!File.Exists(wavPath))
-            {
-               await _ffmpegService.ExtractAudioAsync(videoPath, wavPath);
-            }
-            
+
+            // Use a unique path to ensure WPF binding updates and to avoid stale waveform caches.
+            var wavPath = Path.Combine(tempDir, $"{Path.GetFileNameWithoutExtension(videoPath)}_{Guid.NewGuid():N}.wav");
+
+            WaveformAudioPath = null;
+            await _ffmpegService.ExtractAudioAsync(videoPath, wavPath);
+
             WaveformAudioPath = wavPath;
             StatusMessage = "Ready";
         }
