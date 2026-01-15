@@ -66,6 +66,8 @@ public partial class MainViewModel : ObservableObject
 
     private SubtitleLine? _selectedLineHook;
 
+    private bool _isSyncingSelectedStyle;
+
     [ObservableProperty]
     private string? _activeSubtitleText;
 
@@ -178,31 +180,37 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedStyleFontSizeChanged(double value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.FontSize = value);
     }
 
     partial void OnSelectedStylePrimaryAssColorChanged(string value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.PrimaryColor = SubtitleStyle.AssToColor(value));
     }
 
     partial void OnSelectedStyleOutlineAssColorChanged(string value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.OutlineColor = SubtitleStyle.AssToColor(value));
     }
 
     partial void OnSelectedStyleBackAssColorChanged(string value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.BackColor = SubtitleStyle.AssToColor(value));
     }
 
     partial void OnSelectedStyleOutlineChanged(double value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.Outline = value);
     }
 
     partial void OnSelectedStyleBoxEnabledChanged(bool value)
     {
+        if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.BorderStyle = value ? 3 : 1);
     }
 
@@ -213,12 +221,20 @@ public partial class MainViewModel : ObservableObject
         if (doc == null || line == null) return;
 
         var style = doc.GetStyle(line.StyleName);
-        SelectedStyleFontSize = style.FontSize;
-        SelectedStyleOutline = style.Outline;
-        SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(style.PrimaryColor);
-        SelectedStyleOutlineAssColor = SubtitleStyle.ColorToAss(style.OutlineColor);
-        SelectedStyleBackAssColor = SubtitleStyle.ColorToAss(style.BackColor);
-        SelectedStyleBoxEnabled = style.BorderStyle == 3;
+        _isSyncingSelectedStyle = true;
+        try
+        {
+            SelectedStyleFontSize = style.FontSize;
+            SelectedStyleOutline = style.Outline;
+            SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(style.PrimaryColor);
+            SelectedStyleOutlineAssColor = SubtitleStyle.ColorToAss(style.OutlineColor);
+            SelectedStyleBackAssColor = SubtitleStyle.ColorToAss(style.BackColor);
+            SelectedStyleBoxEnabled = style.BorderStyle == 3;
+        }
+        finally
+        {
+            _isSyncingSelectedStyle = false;
+        }
     }
 
     private void UpdateSelectedStyle(Action<SubtitleStyle> mutator)
