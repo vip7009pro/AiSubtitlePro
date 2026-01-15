@@ -1,0 +1,31 @@
+<Window x:Class="AiSubtitlePro.Views.ModelDownloadDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        mc:Ignorable="d"
+        Title="Download Whisper Model" Height="200" Width="400"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{DynamicResource MaterialDesignPaper}"
+        TextElement.Foreground="{DynamicResource MaterialDesignBody}">
+    
+    <Grid Margin="20">
+        <StackPanel VerticalAlignment="Center">
+            <TextBlock x:Name="StatusText" Text="Downloading model..." 
+                       HorizontalAlignment="Center" Margin="0,0,0,20"
+                       FontSize="16" />
+            
+            <ProgressBar x:Name="ProgressBar" Height="20" Margin="0,0,0,10"
+                        Minimum="0" Maximum="100" />
+            
+            <TextBlock x:Name="ProgressText" Text="0%" 
+                       HorizontalAlignment="Center" Margin="0,0,0,20" />
+            
+            <Button x:Name="CancelButton" Content="Cancel" 
+                    Click="CancelButton_Click" 
+                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                    HorizontalAlignment="Center" Width="100" />
+        </StackPanel>
+    </Grid>
+</Window>

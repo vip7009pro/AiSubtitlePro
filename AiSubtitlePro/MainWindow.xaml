@@ -1,0 +1,363 @@
+﻿<Window x:Class="AiSubtitlePro.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        xmlns:viewmodels="clr-namespace:AiSubtitlePro.ViewModels"
+        xmlns:controls="clr-namespace:AiSubtitlePro.Controls"
+        mc:Ignorable="d"
+        Title="AI Subtitle Pro" 
+        Height="900" Width="1400"
+        MinHeight="600" MinWidth="1000"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource MaterialDesignPaper}">
+    
+    <Window.DataContext>
+        <viewmodels:MainViewModel />
+    </Window.DataContext>
+
+    <Window.InputBindings>
+        <!-- 1. Playback -->
+        <KeyBinding Key="Space" Command="{Binding PlayPauseCommand}" />
+        <KeyBinding Key="P" Modifiers="Ctrl" Command="{Binding PlayPauseCommand}" />
+        <KeyBinding Key="Space" Modifiers="Ctrl" Command="{Binding PlayCurrentLineCommand}" />
+        
+        <!-- 3. Timing -->
+        <KeyBinding Key="Q" Command="{Binding SetStartTimeCommand}" />
+        <KeyBinding Key="W" Command="{Binding SetEndTimeCommand}" />
+        <KeyBinding Key="D" Modifiers="Ctrl" Command="{Binding CommitCommand}" />
+        
+        <!-- 4. Edit -->
+        <KeyBinding Key="Enter" Modifiers="Ctrl" Command="{Binding CommitAndNextCommand}" />
+        <KeyBinding Key="Enter" Modifiers="Shift" Command="{Binding CommitAndStayCommand}" />
+        <KeyBinding Key="Z" Modifiers="Ctrl" Command="{Binding UndoCommand}" />
+        <KeyBinding Key="Y" Modifiers="Ctrl" Command="{Binding RedoCommand}" />
+        
+        <!-- 7. Find -->
+        <KeyBinding Key="F" Modifiers="Ctrl" Command="{Binding FindCommand}" />
+        <KeyBinding Key="H" Modifiers="Ctrl" Command="{Binding ReplaceCommand}" />
+        
+        <!-- 8. File -->
+        <KeyBinding Key="N" Modifiers="Ctrl" Command="{Binding NewDocumentCommand}" />
+        <KeyBinding Key="O" Modifiers="Ctrl" Command="{Binding OpenSubtitleCommand}" />
+        <KeyBinding Key="S" Modifiers="Ctrl" Command="{Binding SaveCommand}" />
+        <KeyBinding Key="S" Modifiers="Ctrl+Shift" Command="{Binding SaveAsCommand}" />
+    </Window.InputBindings>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />  <!-- Menu -->
+            <RowDefinition Height="Auto" />  <!-- Toolbar -->
+            <RowDefinition Height="*" />     <!-- Main Content -->
+            <RowDefinition Height="Auto" />  <!-- Status Bar -->
+        </Grid.RowDefinitions>
+
+        <!-- Menu Bar -->
+        <Menu Grid.Row="0" Background="{DynamicResource MaterialDesignPaper}">
+            <MenuItem Header="_File">
+                <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" InputGestureText="Ctrl+N">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="FileDocument" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="_Open Subtitle..." Command="{Binding OpenSubtitleCommand}" InputGestureText="Ctrl+O">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="FolderOpen" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Open _Media..." Command="{Binding OpenMediaCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Video" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGestureText="Ctrl+S">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="ContentSave" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Save _As..." Command="{Binding SaveAsCommand}" InputGestureText="Ctrl+Shift+S" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="Exit_Click" InputGestureText="Alt+F4" />
+            </MenuItem>
+
+            <MenuItem Header="_Edit">
+                <MenuItem Header="_Add Line" Command="{Binding AddLineCommand}" InputGestureText="Enter">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Plus" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="_Delete Lines" Command="{Binding DeleteSelectedLinesCommand}" InputGestureText="Delete">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Delete" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="_Split Line" Command="{Binding SplitLineCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="CallSplit" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="_Merge with Next" Command="{Binding MergeWithNextCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="CallMerge" />
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="_Timing">
+                <MenuItem Header="Set _Start Time" Command="{Binding SetStartTimeCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="RayStart" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="Set _End Time" Command="{Binding SetEndTimeCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="RayEnd" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="S_hift Timing..." Command="{Binding ShiftTimingCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="ClockOutline" />
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="_AI">
+                <MenuItem Header="_Transcribe Audio..." Command="{Binding TranscribeAudioCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Microphone" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="T_ranslate Subtitles..." Command="{Binding TranslateSubtitlesCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Translate" />
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="_View">
+                <MenuItem Header="Toggle _Theme" Command="{Binding ToggleThemeCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="ThemeLightDark" />
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About AI Subtitle Pro">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Information" />
+                    </MenuItem.Icon>
+                </MenuItem>
+            </MenuItem>
+        </Menu>
+
+        <!-- Toolbar -->
+        <ToolBarTray Grid.Row="1" Background="{DynamicResource MaterialDesignPaper}">
+            <ToolBar Band="0" BandIndex="0" Background="Transparent">
+                <Button ToolTip="New (Ctrl+N)" Command="{Binding NewDocumentCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="FileDocument" Width="20" Height="20" />
+                </Button>
+                <Button ToolTip="Open (Ctrl+O)" Command="{Binding OpenSubtitleCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="FolderOpen" Width="20" Height="20" />
+                </Button>
+                <Button ToolTip="Save (Ctrl+S)" Command="{Binding SaveCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="ContentSave" Width="20" Height="20" />
+                </Button>
+                <Separator />
+                <Button ToolTip="Open Media" Command="{Binding OpenMediaCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="Video" Width="20" Height="20" />
+                </Button>
+                <Separator />
+                <Button ToolTip="Add Line" Command="{Binding AddLineCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="Plus" Width="20" Height="20" />
+                </Button>
+                <Button ToolTip="Delete Line" Command="{Binding DeleteSelectedLinesCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="Delete" Width="20" Height="20" />
+                </Button>
+                <Button ToolTip="Split Line" Command="{Binding SplitLineCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="CallSplit" Width="20" Height="20" />
+                </Button>
+                <Button ToolTip="Merge Lines" Command="{Binding MergeWithNextCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="CallMerge" Width="20" Height="20" />
+                </Button>
+                <Separator />
+                <Button ToolTip="Transcribe (AI)" Command="{Binding TranscribeAudioCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="Microphone" Width="20" Height="20" Foreground="{StaticResource AccentBrush}" />
+                </Button>
+                <Button ToolTip="Translate (AI)" Command="{Binding TranslateSubtitlesCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="Translate" Width="20" Height="20" Foreground="{StaticResource AccentBrush}" />
+                </Button>
+            </ToolBar>
+        </ToolBarTray>
+
+        <!-- Main Content Area -->
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="2*" MinHeight="200" />   <!-- Video & Waveform -->
+                <RowDefinition Height="Auto" />                 <!-- Edit Panel -->
+                <RowDefinition Height="*" MinHeight="100" />    <!-- Subtitle Grid -->
+            </Grid.RowDefinitions>
+
+            <!-- Top Area: Split Video and Tools -->
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3*" MinWidth="400" /> <!-- Video Player -->
+                    <ColumnDefinition Width="Auto" />              <!-- Splitter -->
+                    <ColumnDefinition Width="2*" MinWidth="300" /> <!-- Right Panel (Waveform + Edit) -->
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: Video Player -->
+                <controls:VideoPlayerControl x:Name="VideoPlayer" Grid.Column="0" Margin="4"
+                                             Source="{Binding MediaFilePath}"
+                                             CurrentSubtitle="{Binding ActiveSubtitleText}"
+                                             PositionChanged="VideoPlayer_PositionChanged" />
+
+                <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="Transparent" />
+
+                <!-- Right: Waveform and Edit Panel -->
+                <Grid Grid.Column="2" Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="150" MinHeight="100"/> <!-- Waveform -->
+                        <RowDefinition Height="Auto" />               <!-- Splitter -->
+                        <RowDefinition Height="*" />                  <!-- Edit Panel -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Waveform -->
+                    <Border Grid.Row="0" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="4" Background="{StaticResource SurfaceBrush}">
+                         <controls:WaveformControl x:Name="WaveformControl"
+                                                  AudioPath="{Binding WaveformAudioPath}"
+                                                  Position="{Binding CurrentPosition}"
+                                                  Duration="{Binding MediaDuration}"
+                                                  Subtitles="{Binding DisplayedLines}" />
+                    </Border>
+                    
+                    <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="Transparent" />
+
+                    <!-- Edit Panel (Moved here) -->
+                    <Border Grid.Row="2" Background="#252526" CornerRadius="4" Padding="8">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /> <!-- Controls -->
+                                <RowDefinition Height="*" />    <!-- Text Box -->
+                            </Grid.RowDefinitions>
+
+                            <!-- Tool Bar / Controls -->
+                            <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                                <!-- Styles & Actions -->
+                                <DockPanel Margin="0,0,0,8">
+                                    <ComboBox DockPanel.Dock="Left" Width="100" Margin="0,0,8,0"
+                                              Text="{Binding SelectedLine.StyleName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              IsEditable="True"
+                                              ToolTip="Style Name">
+                                         <ComboBoxItem Content="Default" />
+                                    </ComboBox>
+                                    <Button DockPanel.Dock="Left" Content="Apply All" Command="{Binding ApplyStyleToAllCommand}" 
+                                            Height="28" Padding="8,0" Margin="0,0,8,0" Style="{StaticResource ToolButtonStyle}" Background="#333"/>
+                                    
+                                    <!-- Timing display -->
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                         <TextBlock Text="CPS:" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                         <TextBlock Text="{Binding SelectedLine.Cps, StringFormat='F1'}" Foreground="White" VerticalAlignment="Center" Width="30"/>
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <!-- Time Edits -->
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBox Width="80" Text="{Binding SelectedLine.Start, Mode=TwoWay, StringFormat='h\\:mm\\:ss\\.ff'}" 
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Start Time"/>
+                                    <TextBox Width="80" Text="{Binding SelectedLine.End, Mode=TwoWay, StringFormat='h\\:mm\\:ss\\.ff'}" 
+                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="End Time"/>
+                                    <TextBlock Text="{Binding SelectedLine.Duration, StringFormat='s\\.ff'}" VerticalAlignment="Center" Foreground="Gray"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Large Edit Box -->
+                            <TextBox Grid.Row="1"
+                                     x:Name="SubtitleEditBox"
+                                     Text="{Binding SelectedLine.Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     FontSize="16"
+                                     FontFamily="Segoe UI"
+                                     Background="#1E1E1E"
+                                     Foreground="White"
+                                     CaretBrush="White"
+                                     Padding="8" 
+                                     Style="{StaticResource MaterialDesignOutlinedTextBox}"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- Bottom Row: Subtitle Grid -->
+            <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}" Margin="4" CornerRadius="4">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Grid Header -->
+                    <Border Grid.Row="0" Background="{StaticResource SurfaceLightBrush}" CornerRadius="4,4,0,0" Padding="8,4">
+                        <Grid>
+                            <TextBlock Text="Subtitles" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding DisplayedLines.Count, StringFormat='{}{0} lines'}" 
+                                          Foreground="Gray" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Subtitle DataGrid -->
+                    <DataGrid x:Name="SubtitleGrid" Grid.Row="1"
+                             ItemsSource="{Binding DisplayedLines}"
+                             SelectedItem="{Binding SelectedLine}"
+                             Style="{StaticResource SubtitleGridStyle}"
+                             RowStyle="{StaticResource SubtitleGridRowStyle}"
+                             CellStyle="{StaticResource SubtitleGridCellStyle}"
+                             PreviewKeyDown="SubtitleGrid_PreviewKeyDown"
+                             SelectionChanged="SubtitleGrid_SelectionChanged">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40" IsReadOnly="True" />
+                            <DataGridTextColumn Header="Start" Binding="{Binding Start, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" />
+                            <DataGridTextColumn Header="End" Binding="{Binding End, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" />
+                            <DataGridTextColumn Header="Text" Binding="{Binding Text}" Width="*" IsReadOnly="True" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+
+
+        </Grid>
+
+        <!-- Status Bar -->
+        <StatusBar Grid.Row="3" Style="{StaticResource StatusBarStyle}">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusMessage}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding CurrentDocument.FileName}" Margin="0,0,16,0" />
+                    <TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentDocument.IsDirty}" Value="True">
+                                        <Setter Property="Text" Value="● Modified" />
+                                        <Setter Property="Foreground" Value="Orange" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

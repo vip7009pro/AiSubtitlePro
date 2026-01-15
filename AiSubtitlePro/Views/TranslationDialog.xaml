@@ -1,0 +1,138 @@
+<Window x:Class="AiSubtitlePro.Views.TranslationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        Title="AI Translation" 
+        Height="500" Width="600"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        Background="{DynamicResource MaterialDesignPaper}">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="AI Subtitle Translation" FontSize="20" FontWeight="Bold" />
+            <TextBlock Text="Translate subtitles using LibreTranslate API (context-aware batch translation)"
+                       Foreground="Gray" Margin="0,4,0,0" />
+        </StackPanel>
+
+        <!-- Language Selection -->
+        <GroupBox Grid.Row="1" Header="Language" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Source Language" Foreground="Gray" Margin="0,0,0,4" />
+                    <ComboBox x:Name="SourceLangCombo">
+                        <ComboBoxItem Content="Auto-detect" Tag="auto" IsSelected="True" />
+                        <ComboBoxItem Content="English" Tag="en" />
+                        <ComboBoxItem Content="Japanese" Tag="ja" />
+                        <ComboBoxItem Content="Korean" Tag="ko" />
+                        <ComboBoxItem Content="Chinese" Tag="zh" />
+                        <ComboBoxItem Content="Vietnamese" Tag="vi" />
+                        <ComboBoxItem Content="French" Tag="fr" />
+                        <ComboBoxItem Content="German" Tag="de" />
+                        <ComboBoxItem Content="Spanish" Tag="es" />
+                    </ComboBox>
+                </StackPanel>
+
+                <materialDesign:PackIcon Grid.Column="1" Kind="ArrowRight" 
+                                         VerticalAlignment="Bottom" Margin="16,0" 
+                                         Width="24" Height="24" />
+
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Target Language" Foreground="Gray" Margin="0,0,0,4" />
+                    <ComboBox x:Name="TargetLangCombo">
+                        <ComboBoxItem Content="Vietnamese" Tag="vi" IsSelected="True" />
+                        <ComboBoxItem Content="English" Tag="en" />
+                        <ComboBoxItem Content="Japanese" Tag="ja" />
+                        <ComboBoxItem Content="Korean" Tag="ko" />
+                        <ComboBoxItem Content="Chinese" Tag="zh" />
+                        <ComboBoxItem Content="Thai" Tag="th" />
+                        <ComboBoxItem Content="French" Tag="fr" />
+                        <ComboBoxItem Content="German" Tag="de" />
+                        <ComboBoxItem Content="Spanish" Tag="es" />
+                    </ComboBox>
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+
+        <!-- Translation Mode -->
+        <GroupBox Grid.Row="2" Header="Translation Style" Margin="0,0,0,12">
+            <StackPanel>
+                <RadioButton x:Name="NaturalMode" Content="Natural - Fluent, natural-sounding translation" IsChecked="True" Margin="0,4" />
+                <RadioButton x:Name="LiteralMode" Content="Literal - Close to original text structure" Margin="0,4" />
+                <RadioButton x:Name="ColloquialMode" Content="Colloquial - Casual, conversational (for movies/anime)" Margin="0,4" />
+            </StackPanel>
+        </GroupBox>
+
+        <!-- Options -->
+        <GroupBox Grid.Row="3" Header="Options" Margin="0,0,0,12">
+            <StackPanel>
+                <CheckBox x:Name="BilingualCheck" Content="Create bilingual subtitles (keep original + translation)" Margin="0,4" />
+                <CheckBox x:Name="PreserveTagsCheck" Content="Preserve ASS formatting tags" IsChecked="True" Margin="0,4" />
+                
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="Batch size:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox x:Name="BatchSizeCombo" Width="80">
+                        <ComboBoxItem Content="5" />
+                        <ComboBoxItem Content="10" IsSelected="True" />
+                        <ComboBoxItem Content="20" />
+                        <ComboBoxItem Content="50" />
+                    </ComboBox>
+                    <TextBlock Text="lines per batch (larger = better context)" 
+                              Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0" />
+                </StackPanel>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- Progress -->
+        <Border Grid.Row="4" Background="{StaticResource SurfaceBrush}" CornerRadius="8" Padding="16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <ProgressBar x:Name="ProgressBar" Grid.Row="0" Height="16" Value="0" Margin="0,0,0,8" />
+                <TextBlock x:Name="ProgressText" Grid.Row="1" Text="Ready to translate" Foreground="Gray" />
+
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                    <TextBlock x:Name="LogText" TextWrapping="Wrap" Foreground="Gray"
+                               Text="Translation log will appear here..." FontSize="11" />
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- Buttons -->
+        <Grid Grid.Row="5" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0" Content="Cancel" IsCancel="True" Width="100"
+                    Style="{StaticResource MaterialDesignOutlinedButton}" />
+
+            <Button x:Name="TranslateButton" Grid.Column="2" Content="Start Translation" Width="140"
+                    Click="TranslateButton_Click"
+                    Style="{StaticResource MaterialDesignRaisedButton}" />
+        </Grid>
+    </Grid>
+</Window>

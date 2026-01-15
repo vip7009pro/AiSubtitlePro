@@ -1,0 +1,117 @@
+using AiSubtitlePro.Core.Models;
+using AiSubtitlePro.Infrastructure.AI;
+using System.Windows;
+using System.Windows.Controls;
+
+namespace AiSubtitlePro.Views;
+
+/// <summary>
+/// Translation Dialog for LibreTranslate integration
+/// </summary>
+public partial class TranslationDialog : Window
+{
+    private readonly TranslationService _translationService;
+    private readonly SubtitleDocument _document;
+    private CancellationTokenSource? _cts;
+
+    public SubtitleDocument? Result { get; private set; }
+
+    public TranslationDialog(SubtitleDocument document)
+    {
+        InitializeComponent();
+        _document = document;
+        _translationService = new TranslationService();
+        _translationService.ProgressChanged += OnProgressChanged;
+    }
+
+    private async void TranslateButton_Click(object sender, RoutedEventArgs e)
+    {
+        _cts = new CancellationTokenSource();
+        TranslateButton.IsEnabled = false;
+        TranslateButton.Content = "Translating...";
+
+        try
+        {
+            LogText.Text = "Connecting to LibreTranslate API...\n";
+            ProgressText.Text = "Checking API connection...";
+
+            var connected = await _translationService.TestConnectionAsync();
+            if (!connected)
+            {
+                LogText.Text += "⚠️ Could not connect to LibreTranslate API.\n";
+                LogText.Text += "Using https://libretranslate.com - make sure you have internet access.\n";
+            }
+            else
+            {
+                LogText.Text += "✓ Connected to LibreTranslate API.\n";
+            }
+
+            var options = new TranslationOptions
+            {
+                SourceLanguage = GetSelectedTag(SourceLangCombo),
+                TargetLanguage = GetSelectedTag(TargetLangCombo),
+                Mode = GetSelectedMode(),
+                CreateBilingual = BilingualCheck.IsChecked == true,
+                PreserveAssTags = PreserveTagsCheck.IsChecked == true,
+                BatchSize = int.Parse(((ComboBoxItem)BatchSizeCombo.SelectedItem).Content.ToString()!)
+            };
+
+            LogText.Text += $"Translating {_document.Lines.Count} lines from {options.SourceLanguage} to {options.TargetLanguage}...\n";
+            LogText.Text += $"Mode: {options.Mode}, Batch size: {options.BatchSize}\n\n";
+
+            Result = await _translationService.TranslateDocumentAsync(_document, options, _cts.Token);
+
+            LogText.Text += $"\n✓ Translation complete!\n";
+            ProgressText.Text = "Complete!";
+            ProgressBar.Value = 100;
+
+            DialogResult = true;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            LogText.Text += "\n❌ Translation cancelled.";
+            ProgressText.Text = "Cancelled";
+        }
+        catch (Exception ex)
+        {
+            LogText.Text += $"\n❌ Error: {ex.Message}";
+            ProgressText.Text = "Error occurred";
+            MessageBox.Show($"Translation failed:\n{ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            TranslateButton.IsEnabled = true;
+            TranslateButton.Content = "Start Translation";
+        }
+    }
+
+    private string GetSelectedTag(ComboBox combo)
+    {
+        return (combo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
+    }
+
+    private TranslationMode GetSelectedMode()
+    {
+        if (LiteralMode.IsChecked == true) return TranslationMode.Literal;
+        if (ColloquialMode.IsChecked == true) return TranslationMode.Colloquial;
+        return TranslationMode.Natural;
+    }
+
+    private void OnProgressChanged(object? sender, TranslationProgress e)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            ProgressBar.Value = e.ProgressPercent;
+            ProgressText.Text = $"{e.Status} ({e.CompletedLines}/{e.TotalLines})";
+        });
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _cts?.Cancel();
+        _translationService.Dispose();
+        base.OnClosed(e);
+    }
+}

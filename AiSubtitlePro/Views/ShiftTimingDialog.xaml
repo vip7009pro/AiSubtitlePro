@@ -1,0 +1,81 @@
+<Window x:Class="AiSubtitlePro.Views.ShiftTimingDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        Title="Shift Timing" 
+        Height="320" Width="400"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        Background="{DynamicResource MaterialDesignPaper}">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <TextBlock Grid.Row="0" Text="Shift Subtitle Timing" 
+                   FontSize="18" FontWeight="SemiBold" Margin="0,0,0,16" />
+
+        <!-- Time Input -->
+        <GroupBox Grid.Row="1" Header="Time Offset" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <TextBox x:Name="HoursBox" Width="50" Text="0" TextAlignment="Center" 
+                             materialDesign:HintAssist.Hint="H" Margin="0,0,4,0" />
+                    <TextBlock Text=":" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox x:Name="MinutesBox" Width="50" Text="00" TextAlignment="Center"
+                             materialDesign:HintAssist.Hint="M" Margin="0,0,4,0" />
+                    <TextBlock Text=":" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox x:Name="SecondsBox" Width="50" Text="00" TextAlignment="Center"
+                             materialDesign:HintAssist.Hint="S" Margin="0,0,4,0" />
+                    <TextBlock Text="." VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox x:Name="MillisecondsBox" Width="60" Text="000" TextAlignment="Center"
+                             materialDesign:HintAssist.Hint="MS" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <RadioButton x:Name="ForwardRadio" Content="Forward" IsChecked="True" Margin="0,0,8,0" />
+                    <RadioButton x:Name="BackwardRadio" Content="Backward" />
+                </StackPanel>
+            </Grid>
+        </GroupBox>
+
+        <!-- Apply To -->
+        <GroupBox Grid.Row="2" Header="Apply To" Margin="0,0,0,12">
+            <StackPanel>
+                <RadioButton x:Name="AllLinesRadio" Content="All lines" IsChecked="True" Margin="0,0,0,4" />
+                <RadioButton x:Name="SelectedLinesRadio" Content="Selected lines only" Margin="0,0,0,4" />
+                <RadioButton x:Name="FromCurrentRadio" Content="From current line onwards" />
+            </StackPanel>
+        </GroupBox>
+
+        <!-- What to shift -->
+        <GroupBox Grid.Row="3" Header="Times to Shift" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal">
+                <CheckBox x:Name="ShiftStartCheck" Content="Start times" IsChecked="True" Margin="0,0,16,0" />
+                <CheckBox x:Name="ShiftEndCheck" Content="End times" IsChecked="True" />
+            </StackPanel>
+        </GroupBox>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" IsCancel="True" Width="80" Margin="0,0,8,0"
+                    Style="{StaticResource MaterialDesignOutlinedButton}" />
+            <Button x:Name="ApplyButton" Content="Apply" IsDefault="True" Width="80"
+                    Click="ApplyButton_Click"
+                    Style="{StaticResource MaterialDesignRaisedButton}" />
+        </StackPanel>
+    </Grid>
+</Window>
