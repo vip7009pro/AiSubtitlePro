@@ -243,18 +243,49 @@ public partial class MainViewModel : ObservableObject
         var line = SelectedLine;
         if (doc == null || line == null) return;
 
-        var style = doc.Styles.FirstOrDefault(s => s.Name == line.StyleName);
-        if (style == null)
-        {
-            style = new SubtitleStyle { Name = line.StyleName };
-            doc.Styles.Add(style);
-        }
+        // Per-line editing: if the current style name is shared by multiple lines,
+        // clone it to a unique style for this line before applying changes.
+        var style = EnsureLineHasEditableStyle(doc, line);
 
         mutator(style);
         doc.IsDirty = true;
 
         // Refresh preview for current position
         OnCurrentPositionChanged(CurrentPosition);
+    }
+
+    private static SubtitleStyle EnsureLineHasEditableStyle(SubtitleDocument doc, SubtitleLine line)
+    {
+        var currentName = string.IsNullOrWhiteSpace(line.StyleName) ? "Default" : line.StyleName;
+        var existing = doc.Styles.FirstOrDefault(s => s.Name == currentName);
+
+        if (existing == null)
+        {
+            existing = new SubtitleStyle { Name = currentName };
+            doc.Styles.Add(existing);
+            line.StyleName = currentName;
+            return existing;
+        }
+
+        var usageCount = doc.Lines.Count(l => string.Equals(l.StyleName, currentName, StringComparison.Ordinal));
+        if (usageCount <= 1)
+            return existing;
+
+        // Clone to unique name for this line
+        var baseName = currentName;
+        var uniqueName = $"{baseName}__L{line.Index}";
+        var suffix = 1;
+        while (doc.Styles.Any(s => string.Equals(s.Name, uniqueName, StringComparison.Ordinal)))
+        {
+            uniqueName = $"{baseName}__L{line.Index}_{suffix}";
+            suffix++;
+        }
+
+        var clone = existing.Clone();
+        clone.Name = uniqueName;
+        doc.Styles.Add(clone);
+        line.StyleName = uniqueName;
+        return clone;
     }
 
     private static string BuildAssForPreview(SubtitleDocument doc, List<SubtitleLine> activeLines)

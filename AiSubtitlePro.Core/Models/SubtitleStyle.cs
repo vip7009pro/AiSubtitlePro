@@ -135,7 +135,9 @@ public class SubtitleStyle
     /// </summary>
     public static string ColorToAss(Color color)
     {
-        return $"&H{color.A:X2}{color.B:X2}{color.G:X2}{color.R:X2}";
+        // ASS alpha is inverted: 00 = opaque, FF = transparent.
+        var a = 255 - color.A;
+        return $"&H{a:X2}{color.B:X2}{color.G:X2}{color.R:X2}";
     }
 
     /// <summary>
