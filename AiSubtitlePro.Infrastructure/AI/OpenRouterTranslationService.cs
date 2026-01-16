@@ -64,7 +64,20 @@ public sealed class OpenRouterTranslationService : IDisposable
             var content = await _client.ChatCompletionAsync(apiKey, model, system, user, _cts.Token);
 
             var json = ExtractJson(content);
-            var parsed = JsonSerializer.Deserialize<TranslateSchema>(json);
+            if (string.IsNullOrWhiteSpace(json))
+                throw new Exception($"Model returned empty response (no JSON). Model='{model}'.");
+
+            TranslateSchema? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<TranslateSchema>(json);
+            }
+            catch (Exception ex)
+            {
+                var preview = content;
+                if (preview.Length > 800) preview = preview[..800] + "...";
+                throw new Exception($"Failed to parse JSON from model output. Model='{model}'. Output preview: {preview}", ex);
+            }
             if (parsed == null || !string.Equals(parsed.schema, "AiSubtitlePro.Translation.v1", StringComparison.Ordinal))
                 throw new Exception("Invalid translation schema response");
 
@@ -105,7 +118,7 @@ public sealed class OpenRouterTranslationService : IDisposable
             _ => "natural, fluent"
         };
 
-        return $"You are a professional subtitle translator. Translate each item's text from '{options.SourceLanguage}' to '{options.TargetLanguage}' in a {style} style. Output MUST be valid JSON ONLY, matching the schema exactly.";
+        return $"You are a professional subtitle translator. Translate each item's text from '{options.SourceLanguage}' to '{options.TargetLanguage}' in a {style} style. Output MUST be valid JSON ONLY and MUST start with '{{' and end with '}}'. Do not include markdown, backticks, explanations, or any extra text. The JSON must match the schema exactly.";
     }
 
     private static string BuildUserPrompt(TranslationOptions options, List<object> items)
@@ -121,11 +134,14 @@ public sealed class OpenRouterTranslationService : IDisposable
 
         var payload = JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = true });
 
-        return $"Return JSON with this exact shape (no markdown):\n{schema}\n\nTranslate the following:\n{payload}";
+        return $"Return JSON ONLY with this exact shape (no markdown, no backticks, no extra text):\n{schema}\n\nTranslate the following:\n{payload}";
     }
 
     private static string ExtractJson(string content)
     {
+        if (string.IsNullOrWhiteSpace(content))
+            return string.Empty;
+
         // Models sometimes wrap JSON in ```json ... ```. Strip fences if present.
         var trimmed = content.Trim();
         if (trimmed.StartsWith("```", StringComparison.Ordinal))
@@ -137,8 +153,17 @@ public sealed class OpenRouterTranslationService : IDisposable
             var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
             if (lastFence >= 0)
                 trimmed = trimmed[..lastFence];
+
+            trimmed = trimmed.Trim();
         }
-        return trimmed.Trim();
+
+        // If there's extra text around JSON, extract the first JSON object.
+        var start = trimmed.IndexOf('{');
+        var end = trimmed.LastIndexOf('}');
+        if (start >= 0 && end > start)
+            return trimmed.Substring(start, end - start + 1).Trim();
+
+        return trimmed;
     }
 
     private void ReportProgress(int completed, int total, string status)

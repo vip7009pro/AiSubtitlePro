@@ -3,10 +3,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         Title="OpenRouter API Key"
-        Height="260" Width="520"
+        Height="320" Width="520"
+        MinHeight="320" MinWidth="520"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
         Background="{DynamicResource MaterialDesignPaper}">
 
     <DockPanel Margin="24">
@@ -26,15 +27,17 @@
                     Style="{StaticResource MaterialDesignRaisedButton}" />
         </Grid>
 
-        <StackPanel>
-            <TextBlock Text="OpenRouter API Key" FontSize="20" FontWeight="Bold" />
-            <TextBlock Text="Your key is stored locally (AppData)." Foreground="Gray" Margin="0,4,0,12" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <TextBlock Text="OpenRouter API Key" FontSize="20" FontWeight="Bold" />
+                <TextBlock Text="Your key is stored locally (AppData)." Foreground="Gray" Margin="0,4,0,12" />
 
-            <TextBlock Text="API Key" Foreground="Gray" />
-            <PasswordBox x:Name="ApiKeyBox" Margin="0,6,0,12" />
+                <TextBlock Text="API Key" Foreground="Gray" />
+                <PasswordBox x:Name="ApiKeyBox" Margin="0,6,0,12" />
 
-            <TextBlock Text="Model (optional)" Foreground="Gray" />
-            <TextBox x:Name="ModelBox" Margin="0,6,0,0" Text="deepseek/deepseek-r1:free" />
-        </StackPanel>
+                <TextBlock Text="Model (optional)" Foreground="Gray" />
+                <TextBox x:Name="ModelBox" Margin="0,6,0,0" Text="deepseek/deepseek-r1:free" />
+            </StackPanel>
+        </ScrollViewer>
     </DockPanel>
 </Window>

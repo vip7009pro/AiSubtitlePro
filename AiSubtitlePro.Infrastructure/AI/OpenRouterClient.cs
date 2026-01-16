@@ -29,8 +29,10 @@ public sealed class OpenRouterClient : IDisposable
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userPrompt }
             },
+            response_format = new { type = "json_object" },
             temperature = 0.2,
-            max_tokens = 4096
+            max_tokens = 4096,
+            stream = false
         };
 
         using var httpReq = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
