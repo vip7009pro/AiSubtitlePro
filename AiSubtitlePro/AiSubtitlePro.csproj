@@ -28,4 +28,8 @@
     <None Include="Native\win-x64\**\*.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <Target Name="RemoveConflictingWhisperDll" AfterTargets="Build">
+    <Delete Files="$(TargetDir)whisper.dll" ContinueOnError="true" />
+  </Target>
+
 </Project>

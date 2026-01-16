@@ -120,6 +120,8 @@ public unsafe sealed class FfmpegAudioDecoder : IDisposable
             // Duration
             if (_formatCtx->duration > 0)
                 Duration = TimeSpan.FromSeconds(_formatCtx->duration / (double)ffmpeg.AV_TIME_BASE);
+            else if (_audioStream->duration > 0 && _audioStream->time_base.den > 0)
+                Duration = TimeSpan.FromSeconds(_audioStream->duration * (_audioStream->time_base.num / (double)_audioStream->time_base.den));
             else
                 Duration = TimeSpan.Zero;
 

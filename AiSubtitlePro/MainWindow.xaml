@@ -71,6 +71,11 @@
                         <materialDesign:PackIcon Kind="Video" />
                     </MenuItem.Icon>
                 </MenuItem>
+                <MenuItem Header="_Cut Video..." Command="{Binding CutVideoCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="ContentCut" />
+                    </MenuItem.Icon>
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGestureText="Ctrl+S">
                     <MenuItem.Icon>
@@ -158,6 +163,10 @@
                         <materialDesign:PackIcon Kind="Translate" />
                     </MenuItem.Icon>
                 </MenuItem>
+                <MenuItem Header="Remove _Bilingual">
+                    <MenuItem Header="Keep _1st line" Command="{Binding RemoveBilingualKeepFirstCommand}" />
+                    <MenuItem Header="Keep _2nd line" Command="{Binding RemoveBilingualKeepSecondCommand}" />
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="OpenRouter _API Key..." Click="OpenRouterApiKey_Click">
                     <MenuItem.Icon>
@@ -208,6 +217,9 @@
                 <Button ToolTip="Open Media" Command="{Binding OpenMediaCommand}" Style="{StaticResource ToolButtonStyle}">
                     <materialDesign:PackIcon Kind="Video" Width="20" Height="20" />
                 </Button>
+                <Button ToolTip="Cut Video" Command="{Binding CutVideoCommand}" Style="{StaticResource ToolButtonStyle}">
+                    <materialDesign:PackIcon Kind="ContentCut" Width="20" Height="20" />
+                </Button>
                 <Separator />
                 <Button ToolTip="Add Line" Command="{Binding AddLineCommand}" Style="{StaticResource ToolButtonStyle}">
                     <materialDesign:PackIcon Kind="Plus" Width="20" Height="20" />
@@ -251,6 +263,8 @@
                 <controls:VideoPlayerControl x:Name="VideoPlayer" Grid.Column="0" Margin="4"
                                              Source="{Binding MediaFilePath}"
                                              CurrentSubtitle="{Binding ActiveSubtitleAss}"
+                                             TrimStart="{Binding CutStartAbs}"
+                                             TrimEnd="{Binding CutEndAbs}"
                                              PositionChanged="VideoPlayer_PositionChanged" />
 
                 <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="Transparent" />

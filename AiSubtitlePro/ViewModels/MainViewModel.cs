@@ -58,6 +58,15 @@ public partial class MainViewModel : ObservableObject
     private TimeSpan _mediaDuration = TimeSpan.Zero;
 
     [ObservableProperty]
+    private TimeSpan _mediaDurationAbs = TimeSpan.Zero;
+
+    [ObservableProperty]
+    private TimeSpan _cutStartAbs = TimeSpan.Zero;
+
+    [ObservableProperty]
+    private TimeSpan _cutEndAbs = TimeSpan.Zero;
+
+    [ObservableProperty]
     private string? _mediaFilePath;
 
     [ObservableProperty]
@@ -106,6 +115,8 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _activeSubtitleAss;
+
+    private SubtitleDocument? _cutSourceDocument;
 
     [ObservableProperty]
     private double _selectedStyleFontSize;
@@ -249,6 +260,79 @@ public partial class MainViewModel : ObservableObject
 
             ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
         }
+    }
+
+    public TimeSpan ToMediaTime(TimeSpan timelineTime)
+    {
+        var abs = timelineTime + CutStartAbs;
+        if (abs < TimeSpan.Zero) abs = TimeSpan.Zero;
+        var endAbs = CutEndAbs;
+        if (endAbs <= TimeSpan.Zero || endAbs > MediaDurationAbs) endAbs = MediaDurationAbs;
+        if (endAbs > TimeSpan.Zero && abs > endAbs) abs = endAbs;
+        return abs;
+    }
+
+    public TimeSpan ToTimelineTime(TimeSpan mediaTime)
+    {
+        var rel = mediaTime - CutStartAbs;
+        if (rel < TimeSpan.Zero) rel = TimeSpan.Zero;
+        var end = GetTimelineDuration(MediaDurationAbs);
+        if (end > TimeSpan.Zero && rel > end) rel = end;
+        return rel;
+    }
+
+    public TimeSpan GetTimelineDuration(TimeSpan mediaDuration)
+    {
+        var endAbs = CutEndAbs;
+        if (endAbs <= TimeSpan.Zero || endAbs > mediaDuration) endAbs = mediaDuration;
+        var startAbs = CutStartAbs;
+        if (startAbs < TimeSpan.Zero) startAbs = TimeSpan.Zero;
+        if (startAbs > endAbs) startAbs = endAbs;
+        return endAbs - startAbs;
+    }
+
+    private void ApplyCutToDocument(TimeSpan startAbs, TimeSpan endAbs)
+    {
+        if (CurrentDocument == null) return;
+
+        var source = _cutSourceDocument ?? CurrentDocument;
+        var mediaDur = MediaDurationAbs;
+        if (mediaDur <= TimeSpan.Zero)
+            return;
+
+        if (startAbs < TimeSpan.Zero) startAbs = TimeSpan.Zero;
+        if (endAbs <= TimeSpan.Zero || endAbs > mediaDur) endAbs = mediaDur;
+        if (endAbs < startAbs) endAbs = startAbs;
+
+        // Ensure we always keep an immutable-ish source snapshot for repeated cuts.
+        _cutSourceDocument ??= source.Clone();
+
+        var cutDoc = source.Clone();
+        cutDoc.Lines.Clear();
+
+        foreach (var line in source.Lines)
+        {
+            if (line.End <= startAbs) continue;
+            if (line.Start >= endAbs) continue;
+
+            var shifted = line.Clone();
+            shifted.Start = shifted.Start - startAbs;
+            shifted.End = shifted.End - startAbs;
+            if (shifted.Start < TimeSpan.Zero) shifted.Start = TimeSpan.Zero;
+            if (shifted.End < shifted.Start) shifted.End = shifted.Start;
+            cutDoc.Lines.Add(shifted);
+        }
+
+        cutDoc.ReindexLines();
+        CurrentDocument = cutDoc;
+        RefreshDisplayedLines();
+
+        CutStartAbs = startAbs;
+        CutEndAbs = endAbs;
+        MediaDuration = GetTimelineDuration(MediaDurationAbs);
+        CurrentPosition = TimeSpan.Zero;
+
+        RefreshSubtitlePreview();
     }
 
     partial void OnSelectedLineChanged(SubtitleLine? value)
@@ -562,8 +646,60 @@ public partial class MainViewModel : ObservableObject
         {
             MediaFilePath = dialog.FileName;
             StatusMessage = $"Loaded media: {Path.GetFileName(dialog.FileName)}";
+
+            // Reset cut range when opening new media.
+            CutStartAbs = TimeSpan.Zero;
+            CutEndAbs = TimeSpan.Zero;
+            _cutSourceDocument = null;
+
             await GenerateWaveformAsync(MediaFilePath);
         }
+    }
+
+    [RelayCommand]
+    private void CutVideo()
+    {
+        if (string.IsNullOrWhiteSpace(MediaFilePath) || !File.Exists(MediaFilePath))
+        {
+            MessageBox.Show("Please open a media file first.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MediaDurationAbs <= TimeSpan.Zero)
+        {
+            MessageBox.Show("Media is not ready yet. Please wait for the video to finish loading, then try again.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (CurrentDocument == null)
+        {
+            MessageBox.Show("Please open a subtitle file first.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(WaveformAudioPath) || !File.Exists(WaveformAudioPath))
+        {
+            _ = GenerateWaveformAsync(MediaFilePath);
+            MessageBox.Show("Waveform is not ready yet. Please wait a moment and try again.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var wnd = new CutVideoWindow(
+            mediaPath: MediaFilePath,
+            mediaDuration: MediaDurationAbs,
+            startAbs: CutStartAbs,
+            endAbs: CutEndAbs,
+            currentAbs: ToMediaTime(CurrentPosition));
+
+        wnd.Owner = Application.Current.MainWindow;
+        wnd.DataContext = this;
+        if (wnd.ShowDialog() != true)
+            return;
+
+        ApplyCutToDocument(wnd.StartAbs, wnd.EndAbs);
+        var effectiveEndAbs = wnd.EndAbs;
+        if (effectiveEndAbs <= TimeSpan.Zero || effectiveEndAbs > MediaDurationAbs) effectiveEndAbs = MediaDurationAbs;
+        StatusMessage = $"Cut range set: {FormatTime(TimeSpan.Zero)} - {FormatTime(effectiveEndAbs - wnd.StartAbs)}";
     }
 
     private async Task GenerateWaveformAsync(string videoPath)
@@ -786,7 +922,30 @@ public partial class MainViewModel : ObservableObject
 
                 // Ensure UI updates even if FFmpeg progress messages are delayed.
                 StatusMessage = "Exporting hard-sub video...";
-                await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
+
+                var startAbs = CutStartAbs;
+                var endAbs = CutEndAbs;
+                if (startAbs < TimeSpan.Zero) startAbs = TimeSpan.Zero;
+                if (endAbs <= TimeSpan.Zero || endAbs > MediaDurationAbs) endAbs = MediaDurationAbs;
+
+                if (startAbs > TimeSpan.Zero || CutEndAbs > TimeSpan.Zero)
+                {
+                    var segDuration = endAbs - startAbs;
+                    if (segDuration < TimeSpan.Zero) segDuration = TimeSpan.Zero;
+
+                    await _ffmpegService.RenderHardSubAsync(
+                        mediaPath,
+                        tempAssPath,
+                        outputPath,
+                        start: startAbs,
+                        duration: segDuration,
+                        preferGpuEncoding: true,
+                        cancellationToken: _exportCts.Token);
+                }
+                else
+                {
+                    await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
+                }
 
                 StatusMessage = $"Export complete: {Path.GetFileName(outputPath)}";
             }
@@ -1143,6 +1302,18 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private void RemoveBilingualKeepFirst()
+    {
+        RemoveBilingualInternal(keepSecond: false);
+    }
+
+    [RelayCommand]
+    private void RemoveBilingualKeepSecond()
+    {
+        RemoveBilingualInternal(keepSecond: true);
+    }
+
     #endregion
 
     #region View Commands
@@ -1204,6 +1375,66 @@ public partial class MainViewModel : ObservableObject
     private static string FormatTime(TimeSpan time)
     {
         return $"{(int)time.TotalHours}:{time.Minutes:D2}:{time.Seconds:D2}.{time.Milliseconds / 10:D2}";
+    }
+
+    private void RemoveBilingualInternal(bool keepSecond)
+    {
+        if (CurrentDocument == null || CurrentDocument.Lines.Count == 0)
+            return;
+
+        var doc = CurrentDocument;
+
+        var targetLines = DisplayedLines.Where(l => l.IsSelected).ToList();
+        if (targetLines.Count == 0)
+            targetLines = doc.Lines.ToList();
+
+        var oldTexts = targetLines.Select(l => (line: l, text: l.Text)).ToList();
+
+        string title = keepSecond ? "Remove Bilingual (Keep 2nd)" : "Remove Bilingual (Keep 1st)";
+        _undo.Execute(new DelegateCommand(
+            title,
+            execute: () =>
+            {
+                foreach (var line in targetLines)
+                {
+                    var (first, second, has) = SplitBilingual(line.Text);
+                    if (!has) continue;
+                    line.Text = keepSecond ? second : first;
+                }
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                foreach (var (line, text) in oldTexts)
+                    line.Text = text;
+                doc.IsDirty = true;
+            }));
+
+        RefreshDisplayedLines();
+        RefreshSubtitlePreview();
+        StatusMessage = keepSecond ? "Removed bilingual text (kept 2nd line)" : "Removed bilingual text (kept 1st line)";
+    }
+
+    private static (string first, string second, bool hasBilingual) SplitBilingual(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return (text, text, false);
+
+        const string assNewLine = "\\N";
+        var idx = text.IndexOf(assNewLine, StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var first = text.Substring(0, idx);
+            var second = text.Substring(idx + assNewLine.Length);
+            return (first, second, true);
+        }
+
+        // Fallback to real newlines
+        var parts = text.Split(new[] { "\r\n", "\n", "\r" }, 2, StringSplitOptions.None);
+        if (parts.Length == 2)
+            return (parts[0], parts[1], true);
+
+        return (text, text, false);
     }
 
     #endregion

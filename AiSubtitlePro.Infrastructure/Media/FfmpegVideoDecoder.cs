@@ -157,6 +157,11 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
             {
                 Duration = TimeSpan.FromSeconds(_formatCtx->duration / (double)ffmpeg.AV_TIME_BASE);
             }
+            else if (_videoStream->duration > 0 && _videoStream->time_base.den > 0)
+            {
+                // Some containers don't fill format duration. Fall back to stream duration.
+                Duration = TimeSpan.FromSeconds(_videoStream->duration * (_videoStream->time_base.num / (double)_videoStream->time_base.den));
+            }
             else
             {
                 Duration = TimeSpan.Zero;

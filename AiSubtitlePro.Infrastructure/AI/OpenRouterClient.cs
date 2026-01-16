@@ -2,8 +2,24 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Net;
 
 namespace AiSubtitlePro.Infrastructure.AI;
+
+public sealed class OpenRouterHttpException : Exception
+{
+    public int StatusCode { get; }
+    public Dictionary<string, string> Headers { get; }
+    public string ResponseBody { get; }
+
+    public OpenRouterHttpException(int statusCode, Dictionary<string, string> headers, string responseBody)
+        : base($"OpenRouter error {statusCode}: {responseBody}")
+    {
+        StatusCode = statusCode;
+        Headers = headers;
+        ResponseBody = responseBody;
+    }
+}
 
 public sealed class OpenRouterClient : IDisposable
 {
@@ -44,7 +60,15 @@ public sealed class OpenRouterClient : IDisposable
         using var resp = await _http.SendAsync(httpReq, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var body = await resp.Content.ReadAsStringAsync(cancellationToken);
         if (!resp.IsSuccessStatusCode)
-            throw new Exception($"OpenRouter error {(int)resp.StatusCode}: {body}");
+        {
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var h in resp.Headers)
+                headers[h.Key] = string.Join(",", h.Value);
+            foreach (var h in resp.Content.Headers)
+                headers[h.Key] = string.Join(",", h.Value);
+
+            throw new OpenRouterHttpException((int)resp.StatusCode, headers, body);
+        }
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;

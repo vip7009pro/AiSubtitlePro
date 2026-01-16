@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using AiSubtitlePro.Core.Models;
 using Whisper.net;
@@ -165,6 +166,7 @@ public class WhisperEngine : IDisposable
                 
                 ReportProgress(10, "Loading Whisper model...", TimeSpan.Zero, duration);
 
+                LogLoadedWhisperDll();
                 using var factory = WhisperFactory.FromPath(GetModelPath(_currentModel));
                 var builder = factory.CreateBuilder()
                     .WithLanguage(language == "auto" ? "auto" : language);
@@ -210,6 +212,11 @@ public class WhisperEngine : IDisposable
         {
             // Ignore
         }
+        catch (Exception)
+        {
+            LogLoadedWhisperDll();
+            throw;
+        }
         finally
         {
             _cts = null;
@@ -240,6 +247,27 @@ public class WhisperEngine : IDisposable
             TotalDuration = total,
             CurrentSegment = segment
         });
+    }
+
+    private static void LogLoadedWhisperDll()
+    {
+        try
+        {
+            foreach (ProcessModule m in Process.GetCurrentProcess().Modules)
+            {
+                if (string.Equals(m.ModuleName, "whisper.dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.WriteLine($"Loaded whisper.dll from: {m.FileName}");
+                    return;
+                }
+            }
+
+            Debug.WriteLine("Loaded whisper.dll from: <not loaded>");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Loaded whisper.dll from: <error: {ex.Message}>");
+        }
     }
 
     public void Dispose()

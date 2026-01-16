@@ -35,6 +35,8 @@ public unsafe class VideoEngine : IDisposable
     public int VideoWidth => _width;
     public int VideoHeight => _height;
 
+    public double FrameRate => _decoder.FrameRate;
+
     public TimeSpan Position { get; private set; }
     public TimeSpan Duration { get; private set; }
     public bool IsPlaying => false;
@@ -73,14 +75,56 @@ public unsafe class VideoEngine : IDisposable
         _decoder.Seek(TimeSpan.Zero);
         _ptsPrev = TimeSpan.Zero;
         _ptsCurr = TimeSpan.Zero;
-        if (!DecodeNextIntoCurrent(out _))
+        if (!DecodeNextIntoCurrent(out var firstPts))
             throw new InvalidOperationException("Failed to decode first video frame.");
+
+        // Store decoded BGRA into our current buffer.
+        _ptsCurr = firstPts;
+        Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
 
         // Initialize prev frame to current for stable selection.
         _ptsPrev = _ptsCurr;
         Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
 
-        RenderAt(TimeSpan.Zero);
+        RenderAtSync(TimeSpan.Zero);
+    }
+
+    public void RenderAtSync(TimeSpan masterTime)
+    {
+        if (_writeableBitmap == null) return;
+        if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+
+        if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
+        if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
+
+        EnsureDecodedUpTo(masterTime);
+
+        Position = masterTime;
+        PositionChanged?.Invoke(this, Position);
+
+        lock (_renderLock)
+        {
+            var usePrev = (_ptsCurr > masterTime) && (_ptsPrev != TimeSpan.Zero);
+            var src = usePrev ? _framePrev : _frameCurr;
+
+            Buffer.MemoryCopy((void*)src, (void*)_compositedBuffer, (long)(_stride * _height), (long)(_stride * _height));
+
+            if (_assRenderer != null)
+            {
+                bool changed;
+                var imgPtr = _assRenderer.RenderFrame(masterTime, out changed);
+                if (imgPtr != IntPtr.Zero)
+                    BlendSubtitles(imgPtr);
+            }
+        }
+
+        _uiDispatcher?.Invoke(() =>
+        {
+            if (_writeableBitmap == null) return;
+            _writeableBitmap.Lock();
+            _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
+            _writeableBitmap.Unlock();
+        });
     }
 
     public void SetSubtitleContent(string content)
@@ -113,9 +157,13 @@ public unsafe class VideoEngine : IDisposable
         // Flush our selection buffers and decode one frame so RenderAt has something to show.
         _ptsPrev = TimeSpan.Zero;
         _ptsCurr = TimeSpan.Zero;
-        DecodeNextIntoCurrent(out _);
-        _ptsPrev = _ptsCurr;
-        Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+        if (DecodeNextIntoCurrent(out var firstPts))
+        {
+            _ptsCurr = firstPts;
+            Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
+            _ptsPrev = _ptsCurr;
+            Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+        }
 
         RenderAt(position);
     }

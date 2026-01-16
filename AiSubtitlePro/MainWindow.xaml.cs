@@ -50,6 +50,23 @@ public partial class MainWindow : Window
         var vm = ViewModel;
         if (vm == null) return;
 
+        // Frame-step seek with Left/Right arrows (when not typing in a text input).
+        if (e.Key == System.Windows.Input.Key.Left || e.Key == System.Windows.Input.Key.Right)
+        {
+            if (System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.TextBox
+                || System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase
+                || System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.ComboBox)
+            {
+                // Let text editing/navigation work normally.
+            }
+            else
+            {
+                VideoPlayer.SeekToFrame(forward: e.Key == System.Windows.Input.Key.Right);
+                e.Handled = true;
+                return;
+            }
+        }
+
         if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0)
             return;
 
@@ -65,7 +82,8 @@ public partial class MainWindow : Window
 
         if (e.Key == System.Windows.Input.Key.D1)
         {
-            VideoPlayer.SeekTo(vm.SelectedLine.Start);
+            var abs = vm.ToMediaTime(vm.SelectedLine.Start);
+            VideoPlayer.SeekTo(abs);
             vm.CurrentPosition = vm.SelectedLine.Start;
             e.Handled = true;
             return;
@@ -73,7 +91,8 @@ public partial class MainWindow : Window
 
         if (e.Key == System.Windows.Input.Key.D2)
         {
-            VideoPlayer.SeekTo(vm.SelectedLine.End);
+            var abs = vm.ToMediaTime(vm.SelectedLine.End);
+            VideoPlayer.SeekTo(abs);
             vm.CurrentPosition = vm.SelectedLine.End;
             e.Handled = true;
             return;
@@ -167,7 +186,7 @@ public partial class MainWindow : Window
     {
         if (ViewModel != null)
         {
-            ViewModel.CurrentPosition = position;
+            ViewModel.CurrentPosition = ViewModel.ToTimelineTime(position);
             ViewModel.IsPlaying = VideoPlayer.IsPlaying;
         }
     }
@@ -176,14 +195,27 @@ public partial class MainWindow : Window
     {
         if (ViewModel != null)
         {
-            ViewModel.MediaDuration = VideoPlayer.Duration;
+            if (VideoPlayer.Duration <= TimeSpan.Zero)
+            {
+                VideoPlayer.SeekTo(TimeSpan.Zero);
+            }
+
+            ViewModel.MediaDurationAbs = VideoPlayer.Duration;
+            ViewModel.MediaDuration = ViewModel.GetTimelineDuration(ViewModel.MediaDurationAbs);
         }
     }
 
     private void OnWaveformPositionSeek(object? sender, TimeSpan position)
     {
-        VideoPlayer.SeekTo(position);
-        if (ViewModel != null) ViewModel.CurrentPosition = position;
+        if (ViewModel == null)
+        {
+            VideoPlayer.SeekTo(position);
+            return;
+        }
+
+        var abs = ViewModel.ToMediaTime(position);
+        VideoPlayer.SeekTo(abs);
+        ViewModel.CurrentPosition = position;
     }
 
     private void SubtitleGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -192,7 +224,8 @@ public partial class MainWindow : Window
         // and we have a selected item
         if (ViewModel?.SelectedLine != null && SubtitleGrid.IsKeyboardFocusWithin)
         {
-            VideoPlayer.SeekTo(ViewModel.SelectedLine.Start);
+            var abs = ViewModel.ToMediaTime(ViewModel.SelectedLine.Start);
+            VideoPlayer.SeekTo(abs);
             ViewModel.CurrentPosition = ViewModel.SelectedLine.Start;
         }
     }

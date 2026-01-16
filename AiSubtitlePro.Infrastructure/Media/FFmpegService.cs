@@ -190,6 +190,53 @@ public class FFmpegService : IDisposable
         string videoPath,
         string subtitlePath,
         string outputPath,
+        TimeSpan start,
+        TimeSpan duration,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        // Escape special characters in path for ffmpeg filter
+        var escapedSubPath = subtitlePath
+            .Replace("\\", "/")
+            .Replace(":", "\\:");
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+
+        var startStr = ToFfmpegTime(start);
+        var durStr = ToFfmpegTime(duration);
+
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
+
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var arguments = $"-ss {startStr} -t {durStr} -i \"{videoPath}\" -vf \"ass='{escapedSubPath}'\" -c:v {vcodec} -c:a copy -y \"{outputPath}\"";
+                await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg hard-sub export failed");
+    }
+
+    public async Task RenderHardSubAsync(
+        string videoPath,
+        string subtitlePath,
+        string outputPath,
         bool preferGpuEncoding,
         CancellationToken cancellationToken = default)
     {

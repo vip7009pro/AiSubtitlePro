@@ -104,6 +104,11 @@
                                 <ComboBoxItem Content="10" IsSelected="True" />
                                 <ComboBoxItem Content="20" />
                                 <ComboBoxItem Content="50" />
+                                <ComboBoxItem Content="100" />
+                                <ComboBoxItem Content="200" />
+                                <ComboBoxItem Content="500" />
+                                <ComboBoxItem Content="1000" />
+                                <ComboBoxItem Content="2000" />
                             </ComboBox>
                             <TextBlock Text="lines per batch (larger = better context)"
                                       Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0" />
@@ -118,6 +123,9 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <ProgressBar x:Name="ProgressBar" Grid.Row="0" Height="16" Value="0" Margin="0,0,0,8" />
@@ -127,6 +135,42 @@
                             <TextBlock x:Name="LogText" TextWrapping="Wrap" Foreground="Gray"
                                        Text="Translation log will appear here..." FontSize="11" />
                         </ScrollViewer>
+
+                        <Expander Grid.Row="3" Header="Debug: Last prompt sent" Margin="0,12,0,0">
+                            <TextBox x:Name="DebugPromptBox"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     Height="160" />
+                        </Expander>
+
+                        <Expander Grid.Row="4" Header="Debug: Last raw response" Margin="0,12,0,0">
+                            <TextBox x:Name="DebugRawResponseBox"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     Height="160" />
+                        </Expander>
+
+                        <Expander Grid.Row="5" Header="Paste external JSON" Margin="0,12,0,0">
+                            <StackPanel>
+                                <TextBox x:Name="ExternalJsonBox"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         HorizontalScrollBarVisibility="Auto"
+                                         Height="180" />
+                                <Button x:Name="ApplyExternalJsonButton"
+                                        Content="Apply pasted JSON"
+                                        Margin="0,8,0,0"
+                                        Click="ApplyExternalJsonButton_Click"
+                                        Style="{StaticResource MaterialDesignRaisedButton}" />
+                            </StackPanel>
+                        </Expander>
                     </Grid>
                 </Border>
             </StackPanel>

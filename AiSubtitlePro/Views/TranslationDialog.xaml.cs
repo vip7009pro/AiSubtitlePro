@@ -24,6 +24,33 @@ public partial class TranslationDialog : Window
         _document = document;
         _translationService = new OpenRouterTranslationService();
         _translationService.ProgressChanged += OnProgressChanged;
+        _translationService.PromptPrepared += OnPromptPrepared;
+        _translationService.RawResponseReceived += OnRawResponseReceived;
+    }
+
+    private void OnPromptPrepared(object? sender, OpenRouterTranslationService.PromptDebugInfo e)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            DebugPromptBox.Text =
+                $"Model: {e.Model}\n" +
+                $"Batch: {e.BatchStartLine}-{e.BatchEndLine}\n\n" +
+                "--- SYSTEM ---\n" +
+                e.SystemPrompt +
+                "\n\n--- USER ---\n" +
+                e.UserPrompt;
+        });
+    }
+
+    private void OnRawResponseReceived(object? sender, OpenRouterTranslationService.RawResponseDebugInfo e)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            DebugRawResponseBox.Text =
+                $"Model: {e.Model}\n" +
+                $"Batch: {e.BatchStartLine}-{e.BatchEndLine}\n\n" +
+                e.RawContent;
+        });
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
@@ -96,6 +123,35 @@ public partial class TranslationDialog : Window
             TranslateButton.IsEnabled = true;
             TranslateButton.Content = "Start Translation";
             CancelButton.Content = "Cancel";
+        }
+    }
+
+    private void ApplyExternalJsonButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var options = new TranslationOptions
+            {
+                SourceLanguage = GetSelectedTag(SourceLangCombo),
+                TargetLanguage = GetSelectedTag(TargetLangCombo),
+                Mode = GetSelectedMode(),
+                CreateBilingual = BilingualCheck.IsChecked == true,
+                PreserveAssTags = PreserveTagsCheck.IsChecked == true,
+                BatchSize = int.Parse(((ComboBoxItem)BatchSizeCombo.SelectedItem).Content.ToString()!)
+            };
+
+            var doc = _document.Clone();
+            var applied = OpenRouterTranslationService.ApplyTranslationJsonToDocument(doc, options, ExternalJsonBox.Text);
+            LogText.Text += $"\n✓ Applied pasted JSON to {applied} line(s).\n";
+            Result = doc;
+            DialogResult = true;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            LogText.Text += $"\n❌ Error applying pasted JSON: {ex.Message}";
+            MessageBox.Show($"Failed to apply pasted JSON:\n{ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

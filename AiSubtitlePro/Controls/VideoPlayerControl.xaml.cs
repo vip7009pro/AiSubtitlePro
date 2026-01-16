@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AiSubtitlePro.Infrastructure.Media;
 
 namespace AiSubtitlePro.Controls;
@@ -97,6 +98,26 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     {
         get => (string?)GetValue(CurrentSubtitleProperty);
         set => SetValue(CurrentSubtitleProperty, value);
+    }
+
+    public static readonly DependencyProperty TrimStartProperty =
+        DependencyProperty.Register(nameof(TrimStart), typeof(TimeSpan), typeof(VideoPlayerControl),
+            new PropertyMetadata(TimeSpan.Zero, OnTrimChanged));
+
+    public TimeSpan TrimStart
+    {
+        get => (TimeSpan?)GetValue(TrimStartProperty) ?? TimeSpan.Zero;
+        set => SetValue(TrimStartProperty, value);
+    }
+
+    public static readonly DependencyProperty TrimEndProperty =
+        DependencyProperty.Register(nameof(TrimEnd), typeof(TimeSpan), typeof(VideoPlayerControl),
+            new PropertyMetadata(TimeSpan.Zero, OnTrimChanged));
+
+    public TimeSpan TrimEnd
+    {
+        get => (TimeSpan?)GetValue(TrimEndProperty) ?? TimeSpan.Zero;
+        set => SetValue(TrimEndProperty, value);
     }
 
     #endregion
@@ -197,6 +218,15 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         // Audio device playback position is the master clock.
         var t = audio.GetAudioTime();
 
+        // Clamp to trim range. If we hit the end, pause.
+        var (trimStart, trimEnd) = GetEffectiveTrim();
+        if (t < trimStart) t = trimStart;
+        if (trimEnd > TimeSpan.Zero && t > trimEnd)
+        {
+            t = trimEnd;
+            Pause();
+        }
+
         // If paused and no explicit render requested, do nothing and detach to avoid per-frame callbacks.
         if (!audio.IsPlaying && !_renderOnceRequested)
         {
@@ -221,8 +251,10 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         // UI updates
         var posMs = t.TotalMilliseconds;
         var durMs = Duration.TotalMilliseconds;
-        if (durMs > 0 && Math.Abs(TimelineSlider.Maximum - durMs) > 0.5)
-            TimelineSlider.Maximum = durMs;
+        var (_, effectiveEnd) = GetEffectiveTrim();
+        var effectiveEndMs = effectiveEnd.TotalMilliseconds;
+        if (durMs > 0 && Math.Abs(TimelineSlider.Maximum - effectiveEndMs) > 0.5)
+            TimelineSlider.Maximum = Math.Max(TimelineSlider.Minimum, effectiveEndMs);
         if (Math.Abs(TimelineSlider.Value - posMs) > 0.5)
             TimelineSlider.Value = posMs;
 
@@ -254,6 +286,48 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         }
     }
 
+    private static void OnTrimChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is VideoPlayerControl control)
+        {
+            control.ApplyTrimToUiAndPosition();
+        }
+    }
+
+    private (TimeSpan start, TimeSpan end) GetEffectiveTrim()
+    {
+        var start = TrimStart;
+        var end = TrimEnd;
+        if (start < TimeSpan.Zero) start = TimeSpan.Zero;
+
+        var dur = _videoEngine?.Duration ?? Duration;
+        if (dur > TimeSpan.Zero && start > dur) start = dur;
+
+        if (end <= TimeSpan.Zero || (dur > TimeSpan.Zero && end > dur)) end = dur;
+        if (end < start) end = start;
+        return (start, end);
+    }
+
+    private void ApplyTrimToUiAndPosition()
+    {
+        var (start, end) = GetEffectiveTrim();
+
+        var minMs = start.TotalMilliseconds;
+        var maxMs = Math.Max(minMs, end.TotalMilliseconds);
+
+        TimelineSlider.Minimum = minMs;
+        TimelineSlider.Maximum = maxMs;
+
+        // If current position is outside the range, snap to start and render once.
+        if (Position < start || Position > end)
+        {
+            SeekTo(start);
+        }
+
+        _renderOnceRequested = true;
+        AttachRenderLoop();
+    }
+
     private void LoadMedia(string? path)
     {
         if (string.IsNullOrEmpty(path) || _videoEngine == null)
@@ -270,23 +344,43 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             _audioClock?.Load(path);
             ApplyAudioVolumeFromUi();
 
+            // Publish duration immediately (some files report 0 format duration; audio/video may differ).
+            var vDur = _videoEngine.Duration;
+            var aDur = _audioClock?.Duration ?? TimeSpan.Zero;
+            Duration = vDur > aDur ? vDur : aDur;
+
             Log("VideoPlayerControl: LoadMedia success; playback ready (not auto-playing).");
 
             // Sync slider range to media duration
-            TimelineSlider.Minimum = 0;
-            TimelineSlider.Maximum = Math.Max(0, _videoEngine.Duration.TotalMilliseconds);
+            ApplyTrimToUiAndPosition();
 
             NoMediaOverlay.Visibility = Visibility.Collapsed;
             MediaLoaded?.Invoke(this, EventArgs.Empty);
             
             // Rebind source in case engine recreated it
-             Dispatcher.Invoke(() => {
+            Dispatcher.Invoke(() =>
+            {
                 VideoImage.Source = _videoEngine.VideoSource;
             });
 
-            // Render a single frame at start so UI shows the first frame without starting a continuous loop.
-            _renderOnceRequested = true;
-            AttachRenderLoop();
+            // Force a first-frame render AFTER the Image has a bound source and the layout pass has completed.
+            // This avoids a common WPF issue where WriteableBitmap updates don't show until the visual is realized.
+            Dispatcher.InvokeAsync(() =>
+            {
+                try
+                {
+                    _videoEngine.RenderAtSync(TimeSpan.Zero);
+                    VideoImage.InvalidateVisual();
+                }
+                catch (Exception ex)
+                {
+                    Log($"VideoPlayerControl: first-frame RenderAtSync failed: {ex}");
+                }
+
+                // Render a single frame at start so UI shows the first frame without starting a continuous loop.
+                _renderOnceRequested = true;
+                AttachRenderLoop();
+            }, DispatcherPriority.Loaded);
         }
         catch (Exception ex)
         {
@@ -299,6 +393,10 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     // Playback proxies
     public void Play()
     {
+        var (start, _) = GetEffectiveTrim();
+        if (Position < start)
+            SeekTo(start);
+
         _audioClock?.Play();
         AttachRenderLoop();
         _renderOnceRequested = true;
@@ -319,7 +417,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public void Stop()
     {
         _audioClock?.Stop();
-        _videoEngine?.SeekTo(TimeSpan.Zero);
+        var (start, _) = GetEffectiveTrim();
+        _videoEngine?.SeekTo(start);
+        _audioClock?.Seek(start);
         _renderOnceRequested = true;
         AttachRenderLoop();
     }
@@ -327,9 +427,20 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public void SeekTo(TimeSpan position)
     {
          if (_videoEngine == null) return;
+         var (start, end) = GetEffectiveTrim();
+         if (position < start) position = start;
+         if (end > TimeSpan.Zero && position > end) position = end;
+
          _audioClock?.Seek(position);
          _videoEngine.SeekTo(position);
          _videoEngine.RenderAt(position);
+
+         // Keep DP + external listeners in sync even while paused.
+         Position = position;
+         Duration = _videoEngine.Duration;
+         IsPlaying = _audioClock?.IsPlaying == true;
+         UpdateTimeDisplay();
+         PositionChanged?.Invoke(this, position);
 
          _lastRenderedTime = position;
          _renderOnceRequested = false;
@@ -342,7 +453,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public void SeekToFrame(bool forward)
     {
         if (_videoEngine == null) return;
-        var frameDuration = TimeSpan.FromMilliseconds(1000.0 / 24);
+        var fps = _videoEngine.FrameRate;
+        if (fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps)) fps = 24;
+        var frameDuration = TimeSpan.FromMilliseconds(1000.0 / fps);
         var newTime = Position + (forward ? frameDuration : -frameDuration);
         if (newTime < TimeSpan.Zero) newTime = TimeSpan.Zero;
         SeekTo(newTime);
