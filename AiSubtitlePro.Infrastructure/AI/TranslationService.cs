@@ -219,19 +219,19 @@ public class TranslationService : IDisposable
                     content,
                     cancellationToken);
 
-                if (response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
-                    var result = await response.Content.ReadFromJsonAsync<TranslateResponse>(cancellationToken: cancellationToken);
-                    results.Add(result?.TranslatedText ?? text);
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    throw new Exception($"LibreTranslate error {(int)response.StatusCode}: {body}");
                 }
-                else
-                {
-                    results.Add(text); // Keep original on error
-                }
+
+                var result = await response.Content.ReadFromJsonAsync<TranslateResponse>(cancellationToken: cancellationToken);
+                results.Add(result?.TranslatedText ?? text);
             }
-            catch
+            catch (Exception ex)
             {
-                results.Add(text); // Keep original on error
+                // Fail fast so the UI can show the real reason (rate limit / auth / network / API error)
+                throw new Exception($"Translation failed: {ex.Message}", ex);
             }
         }
 

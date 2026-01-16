@@ -18,7 +18,8 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <Button Grid.Column="0" Content="Cancel" IsCancel="True" Width="100"
+            <Button x:Name="CancelButton" Grid.Column="0" Content="Cancel" IsCancel="True" Width="100"
+                    Click="CancelButton_Click"
                     Style="{StaticResource MaterialDesignOutlinedButton}" />
 
             <Button x:Name="TranslateButton" Grid.Column="2" Content="Start Translation" Width="140"

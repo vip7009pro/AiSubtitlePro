@@ -13,6 +13,8 @@ public partial class MainWindow : Window
 {
     private MainViewModel? ViewModel => DataContext as MainViewModel;
 
+    private string? _subtitleEditTextBefore;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -28,6 +30,18 @@ public partial class MainWindow : Window
         AddHandler(System.Windows.Input.Keyboard.PreviewKeyDownEvent,
             new System.Windows.Input.KeyEventHandler(MainWindow_PreviewKeyDown),
             true);
+
+        SubtitleEditBox.GotKeyboardFocus += (_, __) =>
+        {
+            _subtitleEditTextBefore = ViewModel?.SelectedLine?.Text;
+        };
+        SubtitleEditBox.LostKeyboardFocus += (_, __) =>
+        {
+            var vm = ViewModel;
+            if (vm == null) return;
+            vm.CommitSelectedLineTextEdit(_subtitleEditTextBefore, vm.SelectedLine?.Text);
+            _subtitleEditTextBefore = null;
+        };
     }
 
     private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -88,12 +102,8 @@ public partial class MainWindow : Window
         var vm = ViewModel;
         if (vm?.SelectedLine == null || vm.CurrentDocument == null) return;
 
-        vm.SelectedLine.PosX = e.X;
-        vm.SelectedLine.PosY = e.Y;
-        vm.CurrentDocument.IsDirty = true;
+        vm.SetSelectedLinePosition(e.X, e.Y);
         vm.StatusMessage = $"Subtitle position set (double-click): ({e.X}, {e.Y})";
-
-        vm.RefreshSubtitlePreview();
     }
 
     private void PickPrimaryColor_Click(object sender, RoutedEventArgs e)

@@ -60,38 +60,39 @@ public partial class ShiftTimingDialog : Window
         }
     }
 
-    /// <summary>
-    /// Shows the dialog and applies the shift to the document
-    /// </summary>
-    public static void ShowAndApply(SubtitleDocument document, SubtitleLine? selectedLine)
+    public static bool TryGetOptions(
+        SubtitleLine? selectedLine,
+        SubtitleDocument document,
+        out List<SubtitleLine> linesToShift,
+        out TimeSpan offset,
+        out bool shiftStart,
+        out bool shiftEnd)
     {
+        linesToShift = new List<SubtitleLine>();
+        offset = TimeSpan.Zero;
+        shiftStart = false;
+        shiftEnd = false;
+
         var dialog = new ShiftTimingDialog();
         dialog.Owner = Application.Current.MainWindow;
 
-        if (dialog.ShowDialog() == true)
-        {
-            IEnumerable<SubtitleLine> linesToShift;
+        if (dialog.ShowDialog() != true)
+            return false;
 
-            if (dialog.ApplyToAll)
-            {
-                linesToShift = document.Lines;
-            }
-            else if (dialog.ApplyToSelected)
-            {
-                linesToShift = document.Lines.Where(l => l.IsSelected);
-            }
-            else if (dialog.ApplyFromCurrent && selectedLine != null)
-            {
-                var currentIndex = document.Lines.IndexOf(selectedLine);
-                linesToShift = document.Lines.Skip(currentIndex);
-            }
-            else
-            {
-                linesToShift = document.Lines;
-            }
+        IEnumerable<SubtitleLine> lines;
+        if (dialog.ApplyToAll)
+            lines = document.Lines;
+        else if (dialog.ApplyToSelected)
+            lines = document.Lines.Where(l => l.IsSelected);
+        else if (dialog.ApplyFromCurrent && selectedLine != null)
+            lines = document.Lines.Skip(document.Lines.IndexOf(selectedLine));
+        else
+            lines = document.Lines;
 
-            TimingOperations.ShiftTiming(linesToShift, dialog.Offset, dialog.ShiftStart, dialog.ShiftEnd);
-            document.IsDirty = true;
-        }
+        linesToShift = lines.ToList();
+        offset = dialog.Offset;
+        shiftStart = dialog.ShiftStart;
+        shiftEnd = dialog.ShiftEnd;
+        return true;
     }
 }

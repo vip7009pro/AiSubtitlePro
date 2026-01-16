@@ -20,6 +20,11 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private bool _isDragging;
     private bool _isDisposed;
 
+    private readonly Stopwatch _renderStopwatch = Stopwatch.StartNew();
+    private long _lastRenderTick;
+    private TimeSpan _lastRenderedTime = TimeSpan.MinValue;
+    private bool _renderOnceRequested;
+
     // No timer-based scrubbing in audio-master model.
 
     private AudioPlaybackClock? _audioClock;
@@ -153,7 +158,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             VideoImage.Source = _videoEngine.VideoSource;
             Log("VideoPlayerControl: engine initialized; VideoImage.Source bound.");
 
-            AttachRenderLoop();
+            // Do not render continuously while idle; render will be attached on Play or one-shot render requests.
         }
         catch (Exception ex)
         {
@@ -183,8 +188,29 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         if (engine == null || audio == null) return;
         if (_isDragging) return;
 
+        // Throttle to ~60fps to avoid pegging CPU.
+        var nowTick = _renderStopwatch.ElapsedTicks;
+        var minTicks = Stopwatch.Frequency / 60;
+        if (nowTick - _lastRenderTick < minTicks)
+            return;
+
         // Audio device playback position is the master clock.
         var t = audio.GetAudioTime();
+
+        // If paused and no explicit render requested, do nothing and detach to avoid per-frame callbacks.
+        if (!audio.IsPlaying && !_renderOnceRequested)
+        {
+            DetachRenderLoop();
+            return;
+        }
+
+        // If time hasn't advanced and there's no explicit render request, skip.
+        if (!_renderOnceRequested && t == _lastRenderedTime)
+            return;
+
+        _renderOnceRequested = false;
+        _lastRenderTick = nowTick;
+        _lastRenderedTime = t;
 
         engine.RenderAt(t);
 
@@ -197,11 +223,18 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         var durMs = Duration.TotalMilliseconds;
         if (durMs > 0 && Math.Abs(TimelineSlider.Maximum - durMs) > 0.5)
             TimelineSlider.Maximum = durMs;
-        TimelineSlider.Value = posMs;
+        if (Math.Abs(TimelineSlider.Value - posMs) > 0.5)
+            TimelineSlider.Value = posMs;
 
         UpdatePlayPauseIcon();
         UpdateTimeDisplay();
         PositionChanged?.Invoke(this, t);
+
+        if (!audio.IsPlaying)
+        {
+            // One-shot render finished.
+            DetachRenderLoop();
+        }
     }
 
     private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -250,6 +283,10 @@ public partial class VideoPlayerControl : UserControl, IDisposable
              Dispatcher.Invoke(() => {
                 VideoImage.Source = _videoEngine.VideoSource;
             });
+
+            // Render a single frame at start so UI shows the first frame without starting a continuous loop.
+            _renderOnceRequested = true;
+            AttachRenderLoop();
         }
         catch (Exception ex)
         {
@@ -263,6 +300,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public void Play()
     {
         _audioClock?.Play();
+        AttachRenderLoop();
+        _renderOnceRequested = true;
     }
 
     public void Pause()
@@ -272,12 +311,17 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         // Re-render at current audio time for instant subtitle update.
         var t = _audioClock?.GetAudioTime() ?? Position;
         _videoEngine?.RenderAt(t);
+
+        _renderOnceRequested = false;
+        DetachRenderLoop();
     }
 
     public void Stop()
     {
         _audioClock?.Stop();
         _videoEngine?.SeekTo(TimeSpan.Zero);
+        _renderOnceRequested = true;
+        AttachRenderLoop();
     }
     
     public void SeekTo(TimeSpan position)
@@ -286,6 +330,13 @@ public partial class VideoPlayerControl : UserControl, IDisposable
          _audioClock?.Seek(position);
          _videoEngine.SeekTo(position);
          _videoEngine.RenderAt(position);
+
+         _lastRenderedTime = position;
+         _renderOnceRequested = false;
+
+         // Seek already rendered synchronously; ensure we don't keep a render loop running while paused.
+         if (_audioClock?.IsPlaying != true)
+             DetachRenderLoop();
     }
     
     public void SeekToFrame(bool forward)
@@ -316,6 +367,10 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void UpdateSubtitleOverlay(string? text)
     {
         _videoEngine?.SetSubtitleContent(text ?? "");
+
+        // Subtitle changes should force a one-shot render even when paused.
+        _renderOnceRequested = true;
+        AttachRenderLoop();
     }
 
     private void VideoImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

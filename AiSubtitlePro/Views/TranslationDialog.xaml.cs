@@ -14,6 +14,8 @@ public partial class TranslationDialog : Window
     private readonly SubtitleDocument _document;
     private CancellationTokenSource? _cts;
 
+    private bool _isTranslating;
+
     public SubtitleDocument? Result { get; private set; }
 
     public TranslationDialog(SubtitleDocument document)
@@ -24,10 +26,25 @@ public partial class TranslationDialog : Window
         _translationService.ProgressChanged += OnProgressChanged;
     }
 
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isTranslating)
+        {
+            try { _cts?.Cancel(); } catch { }
+            return;
+        }
+
+        DialogResult = false;
+        Close();
+    }
+
     private async void TranslateButton_Click(object sender, RoutedEventArgs e)
     {
         _cts = new CancellationTokenSource();
+        _isTranslating = true;
+
         TranslateButton.IsEnabled = false;
+        CancelButton.Content = "Cancel";
         TranslateButton.Content = "Translating...";
 
         try
@@ -82,8 +99,10 @@ public partial class TranslationDialog : Window
         }
         finally
         {
+            _isTranslating = false;
             TranslateButton.IsEnabled = true;
             TranslateButton.Content = "Start Translation";
+            CancelButton.Content = "Cancel";
         }
     }
 

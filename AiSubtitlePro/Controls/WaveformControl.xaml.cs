@@ -17,6 +17,7 @@ public partial class WaveformControl : UserControl
     private float[]? _waveformData;
     private readonly List<Rectangle> _subtitleMarkers = new();
     private TimeSpan _audioDuration;
+    private readonly System.Windows.Threading.DispatcherTimer _resizeDebounceTimer;
 
     #region Dependency Properties
 
@@ -74,6 +75,20 @@ public partial class WaveformControl : UserControl
         SizeChanged += OnSizeChanged;
         WaveformCanvas.MouseLeftButtonDown += OnCanvasClick;
         Loaded += OnLoaded;
+
+        _resizeDebounceTimer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _resizeDebounceTimer.Tick += (_, __) =>
+        {
+            _resizeDebounceTimer.Stop();
+            DrawWaveform();
+            DrawTimeRuler();
+            DrawSubtitleMarkers();
+            UpdatePlayhead();
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -374,10 +389,12 @@ public partial class WaveformControl : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        DrawWaveform();
-        DrawTimeRuler();
-        DrawSubtitleMarkers();
-        UpdatePlayhead();
+        if (!IsLoaded)
+            return;
+
+        // Debounce redraw during interactive resize.
+        _resizeDebounceTimer.Stop();
+        _resizeDebounceTimer.Start();
     }
 
     private void OnCanvasClick(object sender, System.Windows.Input.MouseButtonEventArgs e)

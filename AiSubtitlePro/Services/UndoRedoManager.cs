@@ -12,6 +12,47 @@ public interface IUndoableCommand
     void Undo();
 }
 
+public sealed class DelegateCommand : IUndoableCommand
+{
+    private readonly Action _execute;
+    private readonly Action _undo;
+    public string Description { get; }
+
+    public DelegateCommand(string description, Action execute, Action undo)
+    {
+        Description = description;
+        _execute = execute;
+        _undo = undo;
+    }
+
+    public void Execute() => _execute();
+    public void Undo() => _undo();
+}
+
+public sealed class CompositeCommand : IUndoableCommand
+{
+    private readonly IReadOnlyList<IUndoableCommand> _commands;
+    public string Description { get; }
+
+    public CompositeCommand(string description, IReadOnlyList<IUndoableCommand> commands)
+    {
+        Description = description;
+        _commands = commands;
+    }
+
+    public void Execute()
+    {
+        foreach (var c in _commands)
+            c.Execute();
+    }
+
+    public void Undo()
+    {
+        for (int i = _commands.Count - 1; i >= 0; i--)
+            _commands[i].Undo();
+    }
+}
+
 /// <summary>
 /// Manages undo/redo operations with unlimited history
 /// </summary>

@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 
@@ -52,10 +53,39 @@ public class FFmpegService : IDisposable
         }
     }
 
+    private static string? FindExeOnPath(string exeName)
+    {
+        var pathDirs = Environment.GetEnvironmentVariable("PATH")?.Split(';') ?? Array.Empty<string>();
+        foreach (var dir in pathDirs)
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+
+            try
+            {
+                var candidate = Path.Combine(dir.Trim(), exeName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch
+            {
+            }
+        }
+        return null;
+    }
+
     public FFmpegService(string? ffmpegPath = null)
     {
         _ffmpegPath = ffmpegPath ?? DefaultFFmpegPath;
-        _ffprobePath = Path.Combine(Path.GetDirectoryName(_ffmpegPath) ?? "", "ffprobe.exe");
+        var ffprobeOnPath = FindExeOnPath("ffprobe.exe");
+        if (!string.IsNullOrWhiteSpace(ffprobeOnPath))
+        {
+            _ffprobePath = ffprobeOnPath;
+        }
+        else
+        {
+            _ffprobePath = Path.Combine(Path.GetDirectoryName(_ffmpegPath) ?? "", "ffprobe.exe");
+        }
     }
 
     /// <summary>
@@ -153,6 +183,16 @@ public class FFmpegService : IDisposable
         string outputPath,
         CancellationToken cancellationToken = default)
     {
+        await RenderHardSubAsync(videoPath, subtitlePath, outputPath, preferGpuEncoding: true, cancellationToken);
+    }
+
+    public async Task RenderHardSubAsync(
+        string videoPath,
+        string subtitlePath,
+        string outputPath,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Escape special characters in path for ffmpeg filter
@@ -160,9 +200,33 @@ public class FFmpegService : IDisposable
             .Replace("\\", "/")
             .Replace(":", "\\:");
 
-        var arguments = $"-i \"{videoPath}\" -vf \"ass='{escapedSubPath}'\" -c:a copy -y \"{outputPath}\"";
+        // Note: libass filter runs on CPU, but encoding can be GPU-accelerated.
+        // We try common hardware encoders (NVIDIA/Intel/AMD) then fall back to CPU.
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
 
-        await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var arguments = $"-i \"{videoPath}\" -vf \"ass='{escapedSubPath}'\" -c:v {vcodec} -c:a copy -y \"{outputPath}\"";
+                await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                // Try next encoder
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg hard-sub export failed");
     }
 
     /// <summary>
@@ -217,12 +281,16 @@ public class FFmpegService : IDisposable
     {
         var totalDuration = await GetDurationAsync(inputPath);
 
+        // Use FFmpeg's structured progress protocol for reliable progress updates.
+        // This avoids depending on stderr human-readable lines (which vary by build/settings).
+        var effectiveArguments = $"-progress pipe:2 -nostats {arguments}";
+
         _currentProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = _ffmpegPath,
-                Arguments = arguments,
+                Arguments = effectiveArguments,
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 CreateNoWindow = true
@@ -231,14 +299,63 @@ public class FFmpegService : IDisposable
 
         _currentProcess.Start();
 
-        // Parse progress from stderr
+        // Parse progress from stderr (FFmpeg -progress protocol reports key=value lines)
         var progressTask = Task.Run(async () =>
         {
             using var reader = _currentProcess.StandardError;
             while (!reader.EndOfStream)
             {
                 var line = await reader.ReadLineAsync(cancellationToken);
-                if (line != null && line.Contains("time="))
+
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                // Preferred: out_time_ms= (microseconds)
+                if (line.StartsWith("out_time_ms=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = line.Substring("out_time_ms=".Length).Trim();
+                    if (long.TryParse(raw, out var us))
+                    {
+                        var processed = TimeSpan.FromMilliseconds(us / 1000.0);
+                        var percent = totalDuration.TotalSeconds > 0
+                            ? (int)(processed.TotalSeconds * 100 / totalDuration.TotalSeconds)
+                            : 0;
+                        percent = Math.Clamp(percent, 0, 100);
+                        var status = totalDuration.TotalSeconds > 0
+                            ? "Processing..."
+                            : $"Processing... {processed:hh\\:mm\\:ss}";
+                        ReportProgress(percent, status, processed, totalDuration);
+                    }
+                    continue;
+                }
+
+                // Fallback: out_time=HH:MM:SS.micro
+                if (line.StartsWith("out_time=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = line.Substring("out_time=".Length).Trim();
+                    if (TimeSpan.TryParse(raw, out var processed))
+                    {
+                        var percent = totalDuration.TotalSeconds > 0
+                            ? (int)(processed.TotalSeconds * 100 / totalDuration.TotalSeconds)
+                            : 0;
+                        percent = Math.Clamp(percent, 0, 100);
+                        var status = totalDuration.TotalSeconds > 0
+                            ? "Processing..."
+                            : $"Processing... {processed:hh\\:mm\\:ss}";
+                        ReportProgress(percent, status, processed, totalDuration);
+                    }
+                    continue;
+                }
+
+                // progress=end means FFmpeg finished (part of -progress protocol)
+                if (line.Equals("progress=end", StringComparison.OrdinalIgnoreCase))
+                {
+                    ReportProgress(100, "Complete", totalDuration, totalDuration);
+                    continue;
+                }
+
+                // Legacy fallback for builds where -progress isn't honored as expected
+                if (line.Contains("time=", StringComparison.OrdinalIgnoreCase))
                 {
                     var match = System.Text.RegularExpressions.Regex.Match(line, @"time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})");
                     if (match.Success)
@@ -253,6 +370,7 @@ public class FFmpegService : IDisposable
                             ? (int)(processed.TotalSeconds * 100 / totalDuration.TotalSeconds)
                             : 0;
 
+                        percent = Math.Clamp(percent, 0, 100);
                         ReportProgress(percent, "Processing...", processed, totalDuration);
                     }
                 }

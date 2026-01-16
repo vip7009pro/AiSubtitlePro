@@ -7,10 +7,13 @@ using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Diagnostics;
+using System.Threading;
 
 using AiSubtitlePro.Infrastructure.Media;
 using System.Globalization;
 using System.Text;
+using AiSubtitlePro.Services;
 
 namespace AiSubtitlePro.ViewModels;
 
@@ -23,6 +26,18 @@ public partial class MainViewModel : ObservableObject
     private readonly SrtParser _srtParser = new();
     private readonly VttParser _vttParser = new();
     private readonly FFmpegService _ffmpegService = new();
+    private readonly UndoRedoManager _undo = new();
+
+    private enum FfmpegOperation
+    {
+        None,
+        Waveform,
+        ExportHardSub
+    }
+
+    private FfmpegOperation _ffmpegOperation = FfmpegOperation.None;
+    private readonly SemaphoreSlim _ffmpegGate = new(1, 1);
+    private CancellationTokenSource? _exportCts;
 
     [ObservableProperty]
     private SubtitleDocument? _currentDocument;
@@ -64,6 +79,24 @@ public partial class MainViewModel : ObservableObject
     /// </summary>
     public ObservableCollection<string> RecentFiles { get; } = new();
 
+    [ObservableProperty]
+    private bool _canUndo;
+
+    [ObservableProperty]
+    private bool _canRedo;
+
+    [ObservableProperty]
+    private bool _isFfmpegBusy;
+
+    [ObservableProperty]
+    private int _ffmpegProgressPercent;
+
+    [ObservableProperty]
+    private string _ffmpegProgressText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isExportingHardSub;
+
     private SubtitleLine? _selectedLineHook;
 
     private bool _isSyncingSelectedStyle;
@@ -94,8 +127,66 @@ public partial class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
+        _ffmpegService.ProgressChanged += (_, p) =>
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null)
+                return;
+
+            dispatcher.BeginInvoke(() =>
+            {
+                if (_ffmpegOperation == FfmpegOperation.None)
+                    return;
+
+                FfmpegProgressPercent = p.ProgressPercent;
+                FfmpegProgressText = string.IsNullOrWhiteSpace(p.Status) ? "Processing" : p.Status;
+
+                if (_ffmpegOperation == FfmpegOperation.Waveform)
+                {
+                    StatusMessage = p.ProgressPercent > 0 || p.TotalDuration > TimeSpan.Zero
+                        ? $"Extracting audio for waveform... {p.ProgressPercent}%"
+                        : (string.IsNullOrWhiteSpace(p.Status) ? "Extracting audio for waveform..." : p.Status);
+                }
+                else if (_ffmpegOperation == FfmpegOperation.ExportHardSub)
+                {
+                    StatusMessage = p.ProgressPercent > 0 || p.TotalDuration > TimeSpan.Zero
+                        ? $"Exporting hard-sub video... {p.ProgressPercent}%"
+                        : (string.IsNullOrWhiteSpace(p.Status) ? "Exporting hard-sub video..." : p.Status);
+                }
+            });
+        };
+
+        _undo.StateChanged += (_, __) =>
+        {
+            CanUndo = _undo.CanUndo;
+            CanRedo = _undo.CanRedo;
+        };
+
         // Create new document on startup
         NewDocument();
+
+        CanUndo = _undo.CanUndo;
+        CanRedo = _undo.CanRedo;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanUndo))]
+    private void Undo()
+    {
+        _undo.Undo();
+        RefreshDisplayedLines();
+        RefreshSubtitlePreview();
+        if (CurrentDocument != null) CurrentDocument.IsDirty = true;
+        StatusMessage = string.IsNullOrWhiteSpace(_undo.RedoDescription) ? "Undone" : $"Undone: {_undo.RedoDescription}";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRedo))]
+    private void Redo()
+    {
+        _undo.Redo();
+        RefreshDisplayedLines();
+        RefreshSubtitlePreview();
+        if (CurrentDocument != null) CurrentDocument.IsDirty = true;
+        StatusMessage = string.IsNullOrWhiteSpace(_undo.UndoDescription) ? "Redone" : $"Redone: {_undo.UndoDescription}";
     }
 
     [RelayCommand]
@@ -108,13 +199,27 @@ public partial class MainViewModel : ObservableObject
     private void ApplyStyleToAll()
     {
         if (CurrentDocument == null || SelectedLine == null) return;
-        
+
+        var doc = CurrentDocument;
         var styleName = SelectedLine.StyleName;
-        foreach (var line in CurrentDocument.Lines)
-        {
-            line.StyleName = styleName;
-        }
-        CurrentDocument.IsDirty = true;
+        var old = doc.Lines.Select(l => (l, l.StyleName)).ToList();
+
+        _undo.Execute(new DelegateCommand(
+            "Apply Style To All",
+            execute: () =>
+            {
+                foreach (var line in doc.Lines)
+                    line.StyleName = styleName;
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                foreach (var (line, prev) in old)
+                    line.StyleName = prev;
+                doc.IsDirty = true;
+            }));
+
+        RefreshSubtitlePreview();
         StatusMessage = $"Applied style '{styleName}' to all lines";
     }
 
@@ -243,15 +348,61 @@ public partial class MainViewModel : ObservableObject
         var line = SelectedLine;
         if (doc == null || line == null) return;
 
-        // Per-line editing: if the current style name is shared by multiple lines,
-        // clone it to a unique style for this line before applying changes.
-        var style = EnsureLineHasEditableStyle(doc, line);
+        var prevStyleName = line.StyleName;
+        var prevStyles = doc.Styles.Select(s => (s, s.Clone())).ToList();
 
-        mutator(style);
-        doc.IsDirty = true;
+        _undo.Execute(new DelegateCommand(
+            "Edit Style",
+            execute: () =>
+            {
+                var style = EnsureLineHasEditableStyle(doc, line);
+                mutator(style);
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Styles.Clear();
+                foreach (var (_, clone) in prevStyles)
+                    doc.Styles.Add(clone);
+                line.StyleName = prevStyleName;
+                doc.IsDirty = true;
+            }));
 
-        // Refresh preview for current position
         OnCurrentPositionChanged(CurrentPosition);
+    }
+
+    public void CommitSelectedLineTextEdit(string? oldText, string? newText)
+    {
+        if (SelectedLine == null || CurrentDocument == null) return;
+        if (oldText == newText) return;
+
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        var prev = oldText ?? string.Empty;
+        var next = newText ?? string.Empty;
+
+        _undo.Execute(new DelegateCommand(
+            "Edit Text",
+            execute: () => { line.Text = next; doc.IsDirty = true; },
+            undo: () => { line.Text = prev; doc.IsDirty = true; }));
+
+        RefreshSubtitlePreview();
+    }
+
+    public void SetSelectedLinePosition(int x, int y)
+    {
+        if (SelectedLine == null || CurrentDocument == null) return;
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        var oldX = line.PosX;
+        var oldY = line.PosY;
+
+        _undo.Execute(new DelegateCommand(
+            "Set Position",
+            execute: () => { line.PosX = x; line.PosY = y; doc.IsDirty = true; },
+            undo: () => { line.PosX = oldX; line.PosY = oldY; doc.IsDirty = true; }));
+
+        RefreshSubtitlePreview();
     }
 
     private static SubtitleStyle EnsureLineHasEditableStyle(SubtitleDocument doc, SubtitleLine line)
@@ -417,8 +568,21 @@ public partial class MainViewModel : ObservableObject
 
     private async Task GenerateWaveformAsync(string videoPath)
     {
+        var acquired = await _ffmpegGate.WaitAsync(0);
+        if (!acquired)
+        {
+            if (IsExportingHardSub)
+                StatusMessage = "Exporting... (waveform extraction skipped)";
+            return;
+        }
+        var success = false;
         try 
         {
+            _ffmpegOperation = FfmpegOperation.Waveform;
+            IsFfmpegBusy = true;
+            IsExportingHardSub = false;
+            FfmpegProgressPercent = 0;
+            FfmpegProgressText = "Extracting audio for waveform";
             StatusMessage = "Extracting audio for waveform...";
             var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
             Directory.CreateDirectory(tempDir);
@@ -430,11 +594,26 @@ public partial class MainViewModel : ObservableObject
             await _ffmpegService.ExtractAudioAsync(videoPath, wavPath);
 
             WaveformAudioPath = wavPath;
-            StatusMessage = "Ready";
+            success = true;
         }
         catch (Exception ex)
         {
             StatusMessage = $"Waveform error: {ex.Message}";
+        }
+        finally
+        {
+            // Stop accepting waveform progress updates before we set final status.
+            _ffmpegOperation = FfmpegOperation.None;
+            IsFfmpegBusy = false;
+            IsExportingHardSub = false;
+            if (success)
+            {
+                FfmpegProgressPercent = 0;
+                FfmpegProgressText = string.Empty;
+                StatusMessage = "Ready";
+            }
+            if (acquired)
+                _ffmpegGate.Release();
         }
     }
 
@@ -527,12 +706,167 @@ public partial class MainViewModel : ObservableObject
 
     #endregion
 
+    [RelayCommand]
+    private async Task ExportHardSub()
+    {
+        if (CurrentDocument == null) return;
+        if (string.IsNullOrWhiteSpace(MediaFilePath) || !File.Exists(MediaFilePath))
+        {
+            MessageBox.Show("Please open a media file first.", "Export Hard-Sub", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var acquired = await _ffmpegGate.WaitAsync(0);
+        if (!acquired)
+        {
+            if (_ffmpegOperation == FfmpegOperation.Waveform)
+            {
+                try
+                {
+                    _ffmpegService.Cancel();
+                }
+                catch
+                {
+                }
+
+                await _ffmpegGate.WaitAsync();
+                acquired = true;
+            }
+            else
+            {
+                StatusMessage = "Another FFmpeg operation is already running";
+                return;
+            }
+        }
+
+        try
+        {
+            var isFfmpegAvailable = await _ffmpegService.IsAvailableAsync();
+            if (!isFfmpegAvailable)
+            {
+                MessageBox.Show("FFmpeg is not available. Please place ffmpeg.exe next to the app or add it to PATH.", "Export Hard-Sub", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+        var mediaPath = MediaFilePath;
+        var defaultName = Path.GetFileNameWithoutExtension(mediaPath) + "_hardsub" + Path.GetExtension(mediaPath);
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export Video (Hard-Sub) - Render subtitles into video",
+            FileName = defaultName,
+            Filter = "Video Files|*.mp4;*.mkv;*.avi;*.mov;*.wmv;*.webm|All Files|*.*"
+        };
+
+            if (dialog.ShowDialog() != true)
+                return;
+
+        var outputPath = dialog.FileName;
+
+            string tempAssPath = string.Empty;
+            try
+            {
+                _ffmpegOperation = FfmpegOperation.ExportHardSub;
+                IsFfmpegBusy = true;
+                IsExportingHardSub = true;
+                FfmpegProgressPercent = 0;
+                FfmpegProgressText = "Exporting hard-sub video";
+                StatusMessage = "Exporting hard-sub video...";
+
+                _exportCts?.Cancel();
+                _exportCts?.Dispose();
+                _exportCts = new CancellationTokenSource();
+
+                var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
+                Directory.CreateDirectory(tempDir);
+                tempAssPath = Path.Combine(tempDir, $"export_{Guid.NewGuid():N}.ass");
+
+                var assContent = _assParser.Serialize(CurrentDocument);
+                await File.WriteAllTextAsync(tempAssPath, assContent, new UTF8Encoding(true));
+
+                // Ensure UI updates even if FFmpeg progress messages are delayed.
+                StatusMessage = "Exporting hard-sub video...";
+                await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
+
+                StatusMessage = $"Export complete: {Path.GetFileName(outputPath)}";
+            }
+            catch (OperationCanceledException)
+            {
+                StatusMessage = "Export canceled";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Export error: {ex.Message}";
+                MessageBox.Show($"Export failed:\n{ex.Message}", "Export Hard-Sub", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(tempAssPath) && File.Exists(tempAssPath))
+                        File.Delete(tempAssPath);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    _exportCts?.Dispose();
+                    _exportCts = null;
+                }
+                catch
+                {
+                }
+
+                _ffmpegOperation = FfmpegOperation.None;
+                IsFfmpegBusy = false;
+                IsExportingHardSub = false;
+            }
+        }
+        finally
+        {
+            if (acquired)
+                _ffmpegGate.Release();
+        }
+    }
+
+    partial void OnIsExportingHardSubChanged(bool value)
+    {
+        CancelExportHardSubCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsExportingHardSub))]
+    private void CancelExportHardSub()
+    {
+        if (!IsExportingHardSub)
+            return;
+
+        try
+        {
+            _exportCts?.Cancel();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            _ffmpegService.Cancel();
+        }
+        catch
+        {
+        }
+    }
+
     #region Edit Commands
 
     [RelayCommand]
     private void AddLine()
     {
         if (CurrentDocument == null) return;
+
+        var doc = CurrentDocument;
 
         var newLine = new SubtitleLine
         {
@@ -546,9 +880,20 @@ public partial class MainViewModel : ObservableObject
             ? CurrentDocument.Lines.IndexOf(SelectedLine) + 1 
             : CurrentDocument.Lines.Count;
 
-        CurrentDocument.Lines.Insert(insertIndex, newLine);
-        CurrentDocument.ReindexLines();
-        CurrentDocument.IsDirty = true;
+        _undo.Execute(new DelegateCommand(
+            "Add Line",
+            execute: () =>
+            {
+                doc.Lines.Insert(insertIndex, newLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Lines.Remove(newLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            }));
 
         RefreshDisplayedLines();
         SelectedLine = newLine;
@@ -560,19 +905,33 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument == null || SelectedLine == null) return;
 
+        var doc = CurrentDocument;
+
         var selectedLines = DisplayedLines.Where(l => l.IsSelected).ToList();
         if (selectedLines.Count == 0 && SelectedLine != null)
         {
             selectedLines.Add(SelectedLine);
         }
 
-        foreach (var line in selectedLines)
-        {
-            CurrentDocument.Lines.Remove(line);
-        }
+        var deleted = selectedLines.Select(l => (index: doc.Lines.IndexOf(l), line: l)).OrderByDescending(x => x.index).ToList();
 
-        CurrentDocument.ReindexLines();
-        CurrentDocument.IsDirty = true;
+        _undo.Execute(new DelegateCommand(
+            selectedLines.Count == 1 ? "Delete Line" : $"Delete {selectedLines.Count} Lines",
+            execute: () =>
+            {
+                foreach (var (_, line) in deleted)
+                    doc.Lines.Remove(line);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                foreach (var (idx, line) in deleted.OrderBy(x => x.index))
+                    doc.Lines.Insert(Math.Min(idx, doc.Lines.Count), line);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            }));
+
         RefreshDisplayedLines();
 
         StatusMessage = $"Deleted {selectedLines.Count} line(s)";
@@ -583,21 +942,32 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument == null || SelectedLine == null) return;
 
+        var doc = CurrentDocument;
+
         var line = SelectedLine;
         var midTime = line.Start + (line.Duration / 2);
 
-        // Create second half
+        var index = doc.Lines.IndexOf(line);
+        var oldEnd = line.End;
         var newLine = line.Clone();
         newLine.Start = midTime;
 
-        // Update first half
-        line.End = midTime;
-
-        // Insert new line
-        var index = CurrentDocument.Lines.IndexOf(line);
-        CurrentDocument.Lines.Insert(index + 1, newLine);
-        CurrentDocument.ReindexLines();
-        CurrentDocument.IsDirty = true;
+        _undo.Execute(new DelegateCommand(
+            "Split Line",
+            execute: () =>
+            {
+                line.End = midTime;
+                doc.Lines.Insert(index + 1, newLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Lines.Remove(newLine);
+                line.End = oldEnd;
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            }));
 
         RefreshDisplayedLines();
         StatusMessage = "Line split";
@@ -608,19 +978,34 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument == null || SelectedLine == null) return;
 
-        var index = CurrentDocument.Lines.IndexOf(SelectedLine);
-        if (index >= CurrentDocument.Lines.Count - 1) return;
+        var doc = CurrentDocument;
+        var index = doc.Lines.IndexOf(SelectedLine);
+        if (index >= doc.Lines.Count - 1) return;
 
-        var nextLine = CurrentDocument.Lines[index + 1];
-        
-        // Merge text
-        SelectedLine.Text = $"{SelectedLine.Text}\\N{nextLine.Text}";
-        SelectedLine.End = nextLine.End;
+        var line = SelectedLine;
+        var nextLine = doc.Lines[index + 1];
+        var oldText = line.Text;
+        var oldEnd = line.End;
 
-        // Remove next line
-        CurrentDocument.Lines.RemoveAt(index + 1);
-        CurrentDocument.ReindexLines();
-        CurrentDocument.IsDirty = true;
+        _undo.Execute(new DelegateCommand(
+            "Merge Lines",
+            execute: () =>
+            {
+                line.Text = $"{line.Text}\\N{nextLine.Text}";
+                line.End = nextLine.End;
+                doc.Lines.Remove(nextLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                var insertAt = Math.Min(index + 1, doc.Lines.Count);
+                doc.Lines.Insert(insertAt, nextLine);
+                line.Text = oldText;
+                line.End = oldEnd;
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            }));
 
         RefreshDisplayedLines();
         StatusMessage = "Lines merged";
@@ -634,7 +1019,33 @@ public partial class MainViewModel : ObservableObject
     private void ShiftTiming()
     {
         if (CurrentDocument == null) return;
-        ShiftTimingDialog.ShowAndApply(CurrentDocument, SelectedLine);
+        if (!ShiftTimingDialog.TryGetOptions(SelectedLine, CurrentDocument, out var linesToShift, out var offset, out var shiftStart, out var shiftEnd))
+            return;
+
+        var doc = CurrentDocument;
+        var states = linesToShift.Select(l => (l, l.Start, l.End)).ToList();
+
+        _undo.Execute(new DelegateCommand(
+            "Shift Timing",
+            execute: () =>
+            {
+                foreach (var (l, _, _) in states)
+                {
+                    if (shiftStart) l.Start += offset;
+                    if (shiftEnd) l.End += offset;
+                }
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                foreach (var (l, s, e) in states)
+                {
+                    if (shiftStart) l.Start = s;
+                    if (shiftEnd) l.End = e;
+                }
+                doc.IsDirty = true;
+            }));
+
         RefreshDisplayedLines();
         StatusMessage = "Timing shifted";
     }
@@ -643,8 +1054,15 @@ public partial class MainViewModel : ObservableObject
     private void SetStartTime()
     {
         if (SelectedLine == null) return;
-        SelectedLine.Start = CurrentPosition;
-        CurrentDocument!.IsDirty = true;
+        var doc = CurrentDocument;
+        if (doc == null) return;
+        var line = SelectedLine;
+        var old = line.Start;
+        var next = CurrentPosition;
+        _undo.Execute(new DelegateCommand(
+            "Set Start Time",
+            execute: () => { line.Start = next; doc.IsDirty = true; },
+            undo: () => { line.Start = old; doc.IsDirty = true; }));
         StatusMessage = $"Start time set to {FormatTime(CurrentPosition)}";
     }
 
@@ -652,8 +1070,15 @@ public partial class MainViewModel : ObservableObject
     private void SetEndTime()
     {
         if (SelectedLine == null) return;
-        SelectedLine.End = CurrentPosition;
-        CurrentDocument!.IsDirty = true;
+        var doc = CurrentDocument;
+        if (doc == null) return;
+        var line = SelectedLine;
+        var old = line.End;
+        var next = CurrentPosition;
+        _undo.Execute(new DelegateCommand(
+            "Set End Time",
+            execute: () => { line.End = next; doc.IsDirty = true; },
+            undo: () => { line.End = old; doc.IsDirty = true; }));
         StatusMessage = $"End time set to {FormatTime(CurrentPosition)}";
     }
 
