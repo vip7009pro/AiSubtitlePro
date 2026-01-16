@@ -250,6 +250,11 @@ public class TranslationService : IDisposable
         return System.Text.RegularExpressions.Regex.Replace(text, @"\{[^}]*\}", "");
     }
 
+    public static string ExtractTranslatableTextPublic(string text, bool preserveTags)
+    {
+        return ExtractTranslatableText(text, preserveTags);
+    }
+
     /// <summary>
     /// Restores ASS tags from original text to translated text
     /// </summary>
@@ -263,6 +268,11 @@ public class TranslationService : IDisposable
         }
 
         return translated;
+    }
+
+    public static string RestoreAssTagsPublic(string original, string translated)
+    {
+        return RestoreAssTags(original, translated);
     }
 
     private void ReportProgress(int completed, int total, string status)

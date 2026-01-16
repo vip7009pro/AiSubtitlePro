@@ -10,7 +10,7 @@ namespace AiSubtitlePro.Views;
 /// </summary>
 public partial class TranslationDialog : Window
 {
-    private readonly TranslationService _translationService;
+    private readonly OpenRouterTranslationService _translationService;
     private readonly SubtitleDocument _document;
     private CancellationTokenSource? _cts;
 
@@ -22,7 +22,7 @@ public partial class TranslationDialog : Window
     {
         InitializeComponent();
         _document = document;
-        _translationService = new TranslationService();
+        _translationService = new OpenRouterTranslationService();
         _translationService.ProgressChanged += OnProgressChanged;
     }
 
@@ -49,19 +49,12 @@ public partial class TranslationDialog : Window
 
         try
         {
-            LogText.Text = "Connecting to LibreTranslate API...\n";
-            ProgressText.Text = "Checking API connection...";
+            var (apiKey, model) = OpenRouterConfig.Load();
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new Exception("OpenRouter API key is missing. Please set it in AI -> OpenRouter API Key...");
 
-            var connected = await _translationService.TestConnectionAsync();
-            if (!connected)
-            {
-                LogText.Text += "⚠️ Could not connect to LibreTranslate API.\n";
-                LogText.Text += "Using https://libretranslate.com - make sure you have internet access.\n";
-            }
-            else
-            {
-                LogText.Text += "✓ Connected to LibreTranslate API.\n";
-            }
+            LogText.Text = "Connecting to OpenRouter...\n";
+            ProgressText.Text = "Preparing request...";
 
             var options = new TranslationOptions
             {
@@ -76,7 +69,7 @@ public partial class TranslationDialog : Window
             LogText.Text += $"Translating {_document.Lines.Count} lines from {options.SourceLanguage} to {options.TargetLanguage}...\n";
             LogText.Text += $"Mode: {options.Mode}, Batch size: {options.BatchSize}\n\n";
 
-            Result = await _translationService.TranslateDocumentAsync(_document, options, _cts.Token);
+            Result = await _translationService.TranslateDocumentAsync(_document, options, apiKey, model, _cts.Token);
 
             LogText.Text += $"\n✓ Translation complete!\n";
             ProgressText.Text = "Complete!";

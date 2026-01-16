@@ -1,0 +1,62 @@
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+
+namespace AiSubtitlePro.Infrastructure.AI;
+
+public sealed class OpenRouterClient : IDisposable
+{
+    private readonly HttpClient _http;
+
+    public OpenRouterClient(HttpClient? httpClient = null)
+    {
+        _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+    }
+
+    public async Task<string> ChatCompletionAsync(
+        string apiKey,
+        string model,
+        string systemPrompt,
+        string userPrompt,
+        CancellationToken cancellationToken)
+    {
+        var request = new
+        {
+            model,
+            messages = new object[]
+            {
+                new { role = "system", content = systemPrompt },
+                new { role = "user", content = userPrompt }
+            },
+            temperature = 0.2,
+            max_tokens = 4096
+        };
+
+        using var httpReq = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
+        httpReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        httpReq.Headers.Add("HTTP-Referer", "https://localhost");
+        httpReq.Headers.Add("X-Title", "AiSubtitlePro");
+        httpReq.Content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
+
+        using var resp = await _http.SendAsync(httpReq, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+        if (!resp.IsSuccessStatusCode)
+            throw new Exception($"OpenRouter error {(int)resp.StatusCode}: {body}");
+
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var content = root
+            .GetProperty("choices")[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString();
+
+        return content ?? string.Empty;
+    }
+
+    public void Dispose()
+    {
+        _http.Dispose();
+    }
+}

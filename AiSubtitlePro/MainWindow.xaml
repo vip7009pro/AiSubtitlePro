@@ -158,6 +158,12 @@
                         <materialDesign:PackIcon Kind="Translate" />
                     </MenuItem.Icon>
                 </MenuItem>
+                <Separator />
+                <MenuItem Header="OpenRouter _API Key..." Click="OpenRouterApiKey_Click">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="Key" />
+                    </MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
 
             <MenuItem Header="_View">

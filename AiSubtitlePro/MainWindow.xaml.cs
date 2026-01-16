@@ -3,6 +3,7 @@ using AiSubtitlePro.ViewModels;
 using System.Windows;
 using Forms = System.Windows.Forms;
 using AiSubtitlePro.Core.Models;
+using AiSubtitlePro.Views;
 
 namespace AiSubtitlePro;
 
@@ -153,6 +154,13 @@ public partial class MainWindow : Window
     private void Exit_Click(object sender, RoutedEventArgs e)
     {
         System.Windows.Application.Current.Shutdown();
+    }
+
+    private void OpenRouterApiKey_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenRouterApiKeyDialog();
+        dlg.Owner = this;
+        dlg.ShowDialog();
     }
 
     private void VideoPlayer_PositionChanged(object? sender, TimeSpan position)
