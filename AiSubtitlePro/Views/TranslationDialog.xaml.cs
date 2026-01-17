@@ -14,6 +14,7 @@ public partial class TranslationDialog : Window
     private readonly OpenRouterTranslationService _translationService;
     private readonly SubtitleDocument _document;
     private CancellationTokenSource? _cts;
+    private readonly System.Diagnostics.Stopwatch _translateStopwatch = new();
 
     private bool _isTranslating;
 
@@ -106,6 +107,8 @@ public partial class TranslationDialog : Window
         _cts = new CancellationTokenSource();
         _isTranslating = true;
 
+        _translateStopwatch.Restart();
+
         TranslateButton.IsEnabled = false;
         CancelButton.Content = "Cancel";
         TranslateButton.Content = "Translating...";
@@ -134,7 +137,7 @@ public partial class TranslationDialog : Window
 
             Result = await _translationService.TranslateDocumentAsync(_document, options, apiKey, model, _cts.Token);
 
-            LogText.Text += $"\n✓ Translation complete!\n";
+            LogText.Text += $"\n✓ Translation complete! (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})\n";
             ProgressText.Text = "Complete!";
             ProgressBar.Value = 100;
 
@@ -143,13 +146,13 @@ public partial class TranslationDialog : Window
         }
         catch (OperationCanceledException)
         {
-            LogText.Text += "\n❌ Translation cancelled.";
-            ProgressText.Text = "Cancelled";
+            LogText.Text += $"\n❌ Translation cancelled. (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
+            ProgressText.Text = $"Cancelled (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
         }
         catch (Exception ex)
         {
             LogText.Text += $"\n❌ Error: {ex.Message}";
-            ProgressText.Text = "Error occurred";
+            ProgressText.Text = $"Error occurred (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
             MessageBox.Show($"Translation failed:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -208,8 +211,17 @@ public partial class TranslationDialog : Window
         Dispatcher.Invoke(() =>
         {
             ProgressBar.Value = e.ProgressPercent;
-            ProgressText.Text = $"{e.Status} ({e.CompletedLines}/{e.TotalLines})";
+            var elapsed = FormatElapsed(_translateStopwatch.Elapsed);
+            ProgressText.Text = $"{e.Status} ({e.CompletedLines}/{e.TotalLines}) - elapsed {elapsed}";
         });
+    }
+
+    private static string FormatElapsed(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (t.TotalHours >= 1)
+            return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
+        return $"{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
     protected override void OnClosed(EventArgs e)

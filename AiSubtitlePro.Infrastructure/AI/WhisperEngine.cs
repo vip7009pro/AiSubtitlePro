@@ -381,6 +381,7 @@ public class WhisperEngine : IDisposable
         {
             string? whisperPath = null;
             var hasCudaDeps = false;
+            var hasVulkanDep = false;
 
             foreach (ProcessModule m in Process.GetCurrentProcess().Modules)
             {
@@ -392,6 +393,9 @@ public class WhisperEngine : IDisposable
                     || name.StartsWith("cudart", StringComparison.OrdinalIgnoreCase)
                     || name.StartsWith("cuda", StringComparison.OrdinalIgnoreCase))
                     hasCudaDeps = true;
+
+                if (string.Equals(name, "vulkan-1.dll", StringComparison.OrdinalIgnoreCase))
+                    hasVulkanDep = true;
             }
 
             if (!string.IsNullOrWhiteSpace(whisperPath))
@@ -399,12 +403,15 @@ public class WhisperEngine : IDisposable
                 var p = whisperPath.Replace('/', '\\');
                 if (p.Contains("\\cuda\\", StringComparison.OrdinalIgnoreCase) || hasCudaDeps)
                     return "GPU(CUDA)";
-                if (p.Contains("\\vulkan\\", StringComparison.OrdinalIgnoreCase))
+                if (p.Contains("\\vulkan\\", StringComparison.OrdinalIgnoreCase) || hasVulkanDep)
                     return "GPU(Vulkan)";
             }
 
             if (hasCudaDeps)
                 return "GPU(CUDA)";
+
+            if (hasVulkanDep)
+                return "GPU(Vulkan)";
         }
         catch
         {

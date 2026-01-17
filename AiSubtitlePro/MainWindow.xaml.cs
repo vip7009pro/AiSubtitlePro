@@ -4,6 +4,7 @@ using System.Windows;
 using Forms = System.Windows.Forms;
 using AiSubtitlePro.Core.Models;
 using AiSubtitlePro.Views;
+using System.Linq;
 
 namespace AiSubtitlePro;
 
@@ -43,6 +44,9 @@ public partial class MainWindow : Window
             vm.CommitSelectedLineTextEdit(_subtitleEditTextBefore, vm.SelectedLine?.Text);
             _subtitleEditTextBefore = null;
         };
+
+        SubtitleGrid.SelectionChanged += SubtitleGrid_SelectionChanged;
+        SubtitleGrid.PreviewKeyDown += SubtitleGrid_PreviewKeyDown;
     }
 
     private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -227,6 +231,22 @@ public partial class MainWindow : Window
 
     private void SubtitleGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        // Keep model selection flags in sync with DataGrid selection so keyboard selection (Ctrl+A)
+        // is respected by ViewModel delete/shift operations.
+        try
+        {
+            if (ViewModel?.DisplayedLines != null)
+            {
+                foreach (var removed in e.RemovedItems.OfType<SubtitleLine>())
+                    removed.IsSelected = false;
+                foreach (var added in e.AddedItems.OfType<SubtitleLine>())
+                    added.IsSelected = true;
+            }
+        }
+        catch
+        {
+        }
+
         // Only seek if the selection change was user-initiated (grid has focus)
         // and we have a selected item
         if (ViewModel?.SelectedLine != null && SubtitleGrid.IsKeyboardFocusWithin)
@@ -239,6 +259,15 @@ public partial class MainWindow : Window
 
     private void SubtitleGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        // Ctrl+A should select all rows in the grid.
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0
+            && e.Key == System.Windows.Input.Key.A)
+        {
+            SubtitleGrid.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == System.Windows.Input.Key.Delete && ViewModel != null)
         {
             if (ViewModel.DeleteSelectedLinesCommand.CanExecute(null))

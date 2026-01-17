@@ -40,9 +40,13 @@
         
         <!-- 8. File -->
         <KeyBinding Key="N" Modifiers="Ctrl" Command="{Binding NewDocumentCommand}" />
+        <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding CloseProjectCommand}" />
         <KeyBinding Key="O" Modifiers="Ctrl" Command="{Binding OpenSubtitleCommand}" />
         <KeyBinding Key="S" Modifiers="Ctrl" Command="{Binding SaveCommand}" />
         <KeyBinding Key="S" Modifiers="Ctrl+Shift" Command="{Binding SaveAsCommand}" />
+
+        <!-- Subtitle Grid -->
+        <KeyBinding Key="A" Modifiers="Ctrl" Command="{Binding SelectAllLinesCommand}" />
     </Window.InputBindings>
 
     <Grid>
@@ -76,6 +80,8 @@
                         <materialDesign:PackIcon Kind="ContentCut" />
                     </MenuItem.Icon>
                 </MenuItem>
+                <Separator />
+                <MenuItem Header="_Close Project" Command="{Binding CloseProjectCommand}" InputGestureText="Ctrl+L" />
                 <Separator />
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGestureText="Ctrl+S">
                     <MenuItem.Icon>

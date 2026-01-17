@@ -38,6 +38,7 @@ public partial class MainViewModel : ObservableObject
     private FfmpegOperation _ffmpegOperation = FfmpegOperation.None;
     private readonly SemaphoreSlim _ffmpegGate = new(1, 1);
     private CancellationTokenSource? _exportCts;
+    private DateTime _ffmpegOperationStartedUtc;
 
     [ObservableProperty]
     private SubtitleDocument? _currentDocument;
@@ -160,9 +161,11 @@ public partial class MainViewModel : ObservableObject
                 }
                 else if (_ffmpegOperation == FfmpegOperation.ExportHardSub)
                 {
+                    var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
+                    var elapsedText = elapsed > TimeSpan.Zero ? $" (elapsed {FormatElapsed(elapsed)})" : string.Empty;
                     StatusMessage = p.ProgressPercent > 0 || p.TotalDuration > TimeSpan.Zero
-                        ? $"Exporting hard-sub video... {p.ProgressPercent}%"
-                        : (string.IsNullOrWhiteSpace(p.Status) ? "Exporting hard-sub video..." : p.Status);
+                        ? $"Exporting hard-sub video... {p.ProgressPercent}%{elapsedText}"
+                        : (string.IsNullOrWhiteSpace(p.Status) ? $"Exporting hard-sub video...{elapsedText}" : p.Status + elapsedText);
                 }
             });
         };
@@ -260,6 +263,67 @@ public partial class MainViewModel : ObservableObject
 
             ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
         }
+    }
+
+    private static string? TryGetAegisubVideoFilePath(string subtitlePath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(subtitlePath) || !File.Exists(subtitlePath))
+                return null;
+
+            var dir = Path.GetDirectoryName(subtitlePath);
+            var inSection = false;
+            foreach (var raw in File.ReadLines(subtitlePath))
+            {
+                var line = raw?.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                if (line.StartsWith("[", StringComparison.Ordinal) && line.EndsWith("]", StringComparison.Ordinal))
+                {
+                    inSection = string.Equals(line, "[Aegisub Project Garbage]", StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
+
+                if (!inSection)
+                    continue;
+
+                if (line.StartsWith("Video File:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var value = line.Substring("Video File:".Length).Trim();
+                    if (value.Length >= 2 && ((value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal))
+                        || (value.StartsWith("'", StringComparison.Ordinal) && value.EndsWith("'", StringComparison.Ordinal))))
+                    {
+                        value = value[1..^1].Trim();
+                    }
+                    if (string.IsNullOrWhiteSpace(value))
+                        return null;
+
+                    if (Path.IsPathRooted(value))
+                        return value;
+
+                    if (!string.IsNullOrWhiteSpace(dir))
+                        return Path.GetFullPath(Path.Combine(dir, value));
+
+                    return value;
+                }
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string FormatElapsed(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (t.TotalHours >= 1)
+            return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
+        return $"{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
     public TimeSpan ToMediaTime(TimeSpan timelineTime)
@@ -655,6 +719,11 @@ public partial class MainViewModel : ObservableObject
             MediaFilePath = dialog.FileName;
             StatusMessage = $"Loaded media: {Path.GetFileName(dialog.FileName)}";
 
+            // If we already have an ASS/SSA document opened, consider this a project link change.
+            // Mark dirty so a normal Save will persist the Video File link.
+            if (CurrentDocument != null)
+                CurrentDocument.IsDirty = true;
+
             // Reset cut range when opening new media.
             CutStartAbs = TimeSpan.Zero;
             CutEndAbs = TimeSpan.Zero;
@@ -662,6 +731,43 @@ public partial class MainViewModel : ObservableObject
 
             await GenerateWaveformAsync(MediaFilePath);
         }
+    }
+
+    [RelayCommand]
+    private void SelectAllLines()
+    {
+        foreach (var l in DisplayedLines)
+            l.IsSelected = true;
+    }
+
+    [RelayCommand]
+    private void CloseProject()
+    {
+        if (!ConfirmDiscardChanges()) return;
+
+        try
+        {
+            _exportCts?.Cancel();
+        }
+        catch
+        {
+        }
+
+        CurrentDocument = SubtitleDocument.CreateNew();
+        RefreshDisplayedLines();
+
+        MediaFilePath = null;
+        WaveformAudioPath = null;
+
+        CutStartAbs = TimeSpan.Zero;
+        CutEndAbs = TimeSpan.Zero;
+        _cutSourceDocument = null;
+
+        MediaDurationAbs = TimeSpan.Zero;
+        MediaDuration = TimeSpan.Zero;
+        CurrentPosition = TimeSpan.Zero;
+
+        StatusMessage = "Project closed";
     }
 
     [RelayCommand]
@@ -812,12 +918,72 @@ public partial class MainViewModel : ObservableObject
             RefreshDisplayedLines();
 
             AddRecentFile(filePath);
-            StatusMessage = $"Loaded {CurrentDocument.Lines.Count} lines from {Path.GetFileName(filePath)}";
+
+            var openedMedia = false;
+            if (string.IsNullOrWhiteSpace(MediaFilePath) || !File.Exists(MediaFilePath))
+            {
+                string? associated = null;
+                if (string.Equals(Path.GetExtension(filePath), ".ass", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(Path.GetExtension(filePath), ".ssa", StringComparison.OrdinalIgnoreCase))
+                {
+                    associated = TryGetAegisubVideoFilePath(filePath);
+                }
+
+                associated ??= FindAssociatedMediaPath(filePath);
+                if (!string.IsNullOrWhiteSpace(associated) && File.Exists(associated))
+                {
+                    MediaFilePath = associated;
+
+                    // Reset cut range when opening new media.
+                    CutStartAbs = TimeSpan.Zero;
+                    CutEndAbs = TimeSpan.Zero;
+                    _cutSourceDocument = null;
+
+                    await GenerateWaveformAsync(MediaFilePath);
+                    openedMedia = true;
+                }
+                else
+                {
+                    MessageBox.Show("No associated media file was found next to this subtitle file. You can open media manually via Open Media...", "Media not found", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+
+            StatusMessage = openedMedia
+                ? $"Loaded {CurrentDocument.Lines.Count} lines from {Path.GetFileName(filePath)} (media auto-opened)"
+                : $"Loaded {CurrentDocument.Lines.Count} lines from {Path.GetFileName(filePath)}";
         }
         catch (Exception ex)
         {
             StatusMessage = $"Error loading file: {ex.Message}";
             MessageBox.Show($"Failed to load subtitle file:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static string? FindAssociatedMediaPath(string subtitlePath)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(subtitlePath);
+            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+                return null;
+
+            var baseName = Path.GetFileNameWithoutExtension(subtitlePath);
+            if (string.IsNullOrWhiteSpace(baseName))
+                return null;
+
+            var exts = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm" };
+            foreach (var ext in exts)
+            {
+                var candidate = Path.Combine(dir, baseName + ext);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -838,7 +1004,19 @@ public partial class MainViewModel : ObservableObject
                 _ => _assParser
             };
 
-            await parser.SaveFileAsync(CurrentDocument, filePath);
+            // For ASS/SSA, persist Aegisub-style video link (Video File:) when a media is loaded.
+            if ((ext == ".ass" || ext == ".ssa") && !string.IsNullOrWhiteSpace(MediaFilePath) && File.Exists(MediaFilePath))
+            {
+                var ass = _assParser.Serialize(CurrentDocument);
+                ass = UpsertAegisubVideoFile(ass, subtitlePath: filePath, mediaPath: MediaFilePath);
+                await File.WriteAllTextAsync(filePath, ass, new UTF8Encoding(true));
+                CurrentDocument.FilePath = filePath;
+                CurrentDocument.IsDirty = false;
+            }
+            else
+            {
+                await parser.SaveFileAsync(CurrentDocument, filePath);
+            }
             StatusMessage = $"Saved to {Path.GetFileName(filePath)}";
         }
         catch (Exception ex)
@@ -846,6 +1024,76 @@ public partial class MainViewModel : ObservableObject
             StatusMessage = $"Error saving file: {ex.Message}";
             MessageBox.Show($"Failed to save subtitle file:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private static string UpsertAegisubVideoFile(string assContent, string subtitlePath, string mediaPath)
+    {
+        if (string.IsNullOrWhiteSpace(assContent))
+            return assContent;
+
+        var dir = Path.GetDirectoryName(subtitlePath) ?? string.Empty;
+        var videoValue = mediaPath;
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                var relative = Path.GetRelativePath(dir, mediaPath);
+                // Keep relative paths if they don't traverse to different drive.
+                if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative))
+                    videoValue = relative;
+            }
+        }
+        catch
+        {
+        }
+
+        // Ensure we have an Aegisub section containing Video File.
+        var lines = assContent.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None).ToList();
+        var inSection = false;
+        var sectionStart = -1;
+        var videoLineIndex = -1;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var t = lines[i].Trim();
+            if (t.StartsWith("[", StringComparison.Ordinal) && t.EndsWith("]", StringComparison.Ordinal))
+            {
+                inSection = string.Equals(t, "[Aegisub Project Garbage]", StringComparison.OrdinalIgnoreCase);
+                if (inSection) sectionStart = i;
+                continue;
+            }
+
+            if (!inSection) continue;
+
+            if (t.StartsWith("Video File:", StringComparison.OrdinalIgnoreCase))
+            {
+                videoLineIndex = i;
+                break;
+            }
+        }
+
+        var newVideoLine = $"Video File: {videoValue}";
+
+        if (videoLineIndex >= 0)
+        {
+            lines[videoLineIndex] = newVideoLine;
+        }
+        else if (sectionStart >= 0)
+        {
+            // Insert right after the section header.
+            lines.Insert(sectionStart + 1, newVideoLine);
+        }
+        else
+        {
+            // Append new section at end.
+            if (lines.Count > 0 && !string.IsNullOrWhiteSpace(lines[^1]))
+                lines.Add(string.Empty);
+            lines.Add("[Aegisub Project Garbage]");
+            lines.Add(newVideoLine);
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 
     #endregion
@@ -911,6 +1159,7 @@ public partial class MainViewModel : ObservableObject
             try
             {
                 _ffmpegOperation = FfmpegOperation.ExportHardSub;
+                _ffmpegOperationStartedUtc = DateTime.UtcNow;
                 IsFfmpegBusy = true;
                 IsExportingHardSub = true;
                 FfmpegProgressPercent = 0;
@@ -955,15 +1204,18 @@ public partial class MainViewModel : ObservableObject
                     await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
                 }
 
-                StatusMessage = $"Export complete: {Path.GetFileName(outputPath)}";
+                var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
+                StatusMessage = $"Export complete: {Path.GetFileName(outputPath)} (elapsed {FormatElapsed(elapsed)})";
             }
             catch (OperationCanceledException)
             {
-                StatusMessage = "Export canceled";
+                var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
+                StatusMessage = $"Export canceled (elapsed {FormatElapsed(elapsed)})";
             }
             catch (Exception ex)
             {
-                StatusMessage = $"Export error: {ex.Message}";
+                var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
+                StatusMessage = $"Export error: {ex.Message} (elapsed {FormatElapsed(elapsed)})";
                 MessageBox.Show($"Export failed:\n{ex.Message}", "Export Hard-Sub", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
@@ -1074,7 +1326,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void DeleteSelectedLines()
     {
-        if (CurrentDocument == null || SelectedLine == null) return;
+        if (CurrentDocument == null) return;
 
         var doc = CurrentDocument;
 
@@ -1083,6 +1335,9 @@ public partial class MainViewModel : ObservableObject
         {
             selectedLines.Add(SelectedLine);
         }
+
+        if (selectedLines.Count == 0)
+            return;
 
         var deleted = selectedLines.Select(l => (index: doc.Lines.IndexOf(l), line: l)).OrderByDescending(x => x.index).ToList();
 
@@ -1306,7 +1561,8 @@ public partial class MainViewModel : ObservableObject
                 CurrentDocument = wizard.Result;
                 RefreshDisplayedLines();
                 var rt = string.IsNullOrWhiteSpace(wizard.RuntimeUsed) ? "" : $" ({wizard.RuntimeUsed})";
-                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated{rt}";
+                var elapsed = wizard.Elapsed > TimeSpan.Zero ? $" (elapsed {FormatElapsed(wizard.Elapsed)})" : string.Empty;
+                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated{rt}{elapsed}";
             }
 
             return;

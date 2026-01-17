@@ -20,6 +20,9 @@ public partial class TranscriptionWizard : Window
     
     public SubtitleDocument? Result { get; private set; }
     public string RuntimeUsed { get; private set; } = "";
+    public TimeSpan Elapsed { get; private set; }
+
+    private readonly System.Diagnostics.Stopwatch _transcribeStopwatch = new();
 
     public TranscriptionWizard(string? mediaFilePath = null, TimeSpan? startAbs = null, TimeSpan? duration = null)
     {
@@ -177,6 +180,8 @@ public partial class TranscriptionWizard : Window
         NextButton.IsEnabled = false;
         BackButton.IsEnabled = false;
 
+        _transcribeStopwatch.Restart();
+
         try
         {
             LogText.Text = "Loading Whisper model...\n";
@@ -207,9 +212,10 @@ public partial class TranscriptionWizard : Window
             }
 
             RuntimeUsed = WhisperEngine.DetectRuntimeUsed();
+            Elapsed = _transcribeStopwatch.Elapsed;
 
             LogText.Text += $"\nTranscription complete! Generated {Result.Lines.Count} subtitle lines.\n";
-            ProgressText.Text = "Complete!";
+            ProgressText.Text = $"Complete! (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             ProgressBar.Value = 100;
 
             NextButton.IsEnabled = true;
@@ -218,12 +224,14 @@ public partial class TranscriptionWizard : Window
         catch (OperationCanceledException)
         {
             LogText.Text += "\nTranscription cancelled.";
-            ProgressText.Text = "Cancelled";
+            Elapsed = _transcribeStopwatch.Elapsed;
+            ProgressText.Text = $"Cancelled (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
         }
         catch (Exception ex)
         {
             LogText.Text += $"\nError: {ex.Message}";
-            ProgressText.Text = "Error occurred";
+            Elapsed = _transcribeStopwatch.Elapsed;
+            ProgressText.Text = $"Error occurred (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             MessageBox.Show($"Transcription failed:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -238,13 +246,21 @@ public partial class TranscriptionWizard : Window
         Dispatcher.Invoke(() =>
         {
             ProgressBar.Value = e.ProgressPercent;
-            ProgressText.Text = e.Status;
+            ProgressText.Text = $"{e.Status} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
 
             if (e.CurrentSegment != null)
             {
                 LogText.Text += $"[{e.CurrentSegment.Start:hh\\:mm\\:ss}] {e.CurrentSegment.Text}\n";
             }
         });
+    }
+
+    private static string FormatElapsed(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (t.TotalHours >= 1)
+            return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
+        return $"{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
     protected override void OnClosed(EventArgs e)
