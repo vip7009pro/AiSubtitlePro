@@ -13,18 +13,35 @@ public partial class TranscriptionWizard : Window
 {
     private readonly WhisperEngine _whisperEngine;
     private CancellationTokenSource? _cts;
+
+    private readonly string? _fixedMediaPath;
+    private readonly TimeSpan? _startAbs;
+    private readonly TimeSpan? _duration;
     
     public SubtitleDocument? Result { get; private set; }
 
-    public TranscriptionWizard()
+    public TranscriptionWizard(string? mediaFilePath = null, TimeSpan? startAbs = null, TimeSpan? duration = null)
     {
         InitializeComponent();
         _whisperEngine = new WhisperEngine();
         _whisperEngine.ProgressChanged += OnProgressChanged;
+
+        _fixedMediaPath = string.IsNullOrWhiteSpace(mediaFilePath) ? null : mediaFilePath;
+        _startAbs = startAbs;
+        _duration = duration;
+
+        if (_fixedMediaPath != null)
+        {
+            FilePathBox.Text = _fixedMediaPath;
+            FilePathBox.IsReadOnly = true;
+        }
     }
 
     private void BrowseFile_Click(object sender, RoutedEventArgs e)
     {
+        if (_fixedMediaPath != null)
+            return;
+
         var dialog = new OpenFileDialog
         {
             Filter = "Media Files|*.mp4;*.mkv;*.avi;*.mov;*.wmv;*.webm;*.mp3;*.wav;*.flac;*.aac;*.m4a|" +
@@ -171,10 +188,22 @@ public partial class TranscriptionWizard : Window
             LogText.Text += "Model loaded successfully.\n";
             LogText.Text += $"Starting transcription of: {Path.GetFileName(FilePathBox.Text)}\n";
 
-            Result = await _whisperEngine.TranscribeAsync(
-                FilePathBox.Text,
-                GetSelectedLanguage(),
-                _cts.Token);
+            if (_fixedMediaPath != null && _startAbs.HasValue && _duration.HasValue)
+            {
+                Result = await _whisperEngine.TranscribeAsync(
+                    _fixedMediaPath,
+                    startAbs: _startAbs.Value,
+                    duration: _duration.Value,
+                    language: GetSelectedLanguage(),
+                    cancellationToken: _cts.Token);
+            }
+            else
+            {
+                Result = await _whisperEngine.TranscribeAsync(
+                    FilePathBox.Text,
+                    GetSelectedLanguage(),
+                    _cts.Token);
+            }
 
             LogText.Text += $"\nTranscription complete! Generated {Result.Lines.Count} subtitle lines.\n";
             ProgressText.Text = "Complete!";

@@ -100,7 +100,10 @@ public partial class MainWindow : Window
 
         if (e.Key == System.Windows.Input.Key.D3)
         {
-            vm.SelectedLine.Start = vm.CurrentPosition;
+            var start = vm.CurrentPosition;
+            if (start < TimeSpan.Zero) start = TimeSpan.Zero;
+            if (vm.MediaDuration > TimeSpan.Zero && start > vm.MediaDuration) start = vm.MediaDuration;
+            vm.SelectedLine.Start = start;
             vm.CurrentDocument!.IsDirty = true;
             vm.RefreshSubtitlePreview();
             e.Handled = true;
@@ -109,7 +112,11 @@ public partial class MainWindow : Window
 
         if (e.Key == System.Windows.Input.Key.D4)
         {
-            vm.SelectedLine.End = vm.CurrentPosition;
+            var end = vm.CurrentPosition;
+            if (end < TimeSpan.Zero) end = TimeSpan.Zero;
+            if (vm.MediaDuration > TimeSpan.Zero && end > vm.MediaDuration) end = vm.MediaDuration;
+            if (end < vm.SelectedLine.Start) end = vm.SelectedLine.Start;
+            vm.SelectedLine.End = end;
             vm.CurrentDocument!.IsDirty = true;
             vm.RefreshSubtitlePreview();
             e.Handled = true;

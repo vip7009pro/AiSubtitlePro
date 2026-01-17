@@ -229,6 +229,113 @@ public class WhisperEngine : IDisposable
         return document;
     }
 
+    public async Task<SubtitleDocument> TranscribeAsync(
+        string mediaFilePath,
+        TimeSpan startAbs,
+        TimeSpan duration,
+        string language = "auto",
+        CancellationToken cancellationToken = default)
+    {
+        if (!_isLoaded || _currentModel == default)
+            throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
+
+        if (!File.Exists(mediaFilePath))
+            throw new FileNotFoundException("Media file not found.", mediaFilePath);
+
+        if (startAbs < TimeSpan.Zero) startAbs = TimeSpan.Zero;
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var document = SubtitleDocument.CreateNew();
+
+        string? tempWavPath = null;
+
+        try
+        {
+            ReportProgress(0, "Preparing audio...", TimeSpan.Zero, TimeSpan.Zero);
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
+            Directory.CreateDirectory(tempDir);
+            tempWavPath = Path.Combine(tempDir, Guid.NewGuid() + ".wav");
+
+            using (var ffmpeg = new Media.FFmpegService())
+            {
+                await ffmpeg.ExtractAudioAsync(mediaFilePath, tempWavPath, startAbs, duration, _cts.Token);
+
+                var total = duration;
+                if (total <= TimeSpan.Zero)
+                    total = await ffmpeg.GetDurationAsync(tempWavPath);
+
+                ReportProgress(10, "Loading Whisper model...", TimeSpan.Zero, total);
+
+                LogLoadedWhisperDll();
+                using var factory = WhisperFactory.FromPath(GetModelPath(_currentModel));
+                var builder = factory.CreateBuilder()
+                    .WithLanguage(language == "auto" ? "auto" : language);
+
+                using var processor = builder.Build();
+                using var fileStream = File.OpenRead(tempWavPath);
+
+                ReportProgress(15, "Transcribing...", TimeSpan.Zero, total);
+
+                await foreach (var segment in processor.ProcessAsync(fileStream, _cts.Token))
+                {
+                    var text = segment.Text.Trim();
+                    if (string.IsNullOrWhiteSpace(text)) continue;
+
+                    // Segment is already relative to extracted WAV => 0-based within cut.
+                    var subLine = new SubtitleLine
+                    {
+                        Start = segment.Start,
+                        End = segment.End,
+                        Text = text
+                    };
+                    document.AddLine(subLine);
+
+                    var processed = segment.End;
+                    var progress = (total.TotalSeconds > 0)
+                        ? 15 + (int)(processed.TotalSeconds / total.TotalSeconds * 85)
+                        : 15;
+
+                    ReportProgress(
+                        progress,
+                        "Transcribing...",
+                        processed,
+                        total,
+                        new TranscriptionSegment
+                        {
+                            Start = segment.Start,
+                            End = segment.End,
+                            Text = text,
+                            Confidence = segment.Probability,
+                            Language = language
+                        });
+                }
+            }
+
+            ReportProgress(100, "Transcription complete", TimeSpan.Zero, TimeSpan.Zero);
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore
+        }
+        catch (Exception)
+        {
+            LogLoadedWhisperDll();
+            throw;
+        }
+        finally
+        {
+            _cts = null;
+            if (tempWavPath != null && File.Exists(tempWavPath))
+            {
+                try { File.Delete(tempWavPath); } catch { }
+            }
+        }
+
+        return document;
+    }
+
     /// <summary>
     /// Cancels ongoing transcription
     /// </summary>

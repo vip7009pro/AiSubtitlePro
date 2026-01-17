@@ -467,7 +467,19 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     
     private void UpdateTimeDisplay()
     {
-        TimeDisplay.Text = $"{Position:hh\\:mm\\:ss\\.ff} / {Duration:hh\\:mm\\:ss\\.ff}";
+        var (trimStart, trimEnd) = GetEffectiveTrim();
+
+        var pos = Position;
+        if (pos < trimStart) pos = trimStart;
+        if (trimEnd > TimeSpan.Zero && pos > trimEnd) pos = trimEnd;
+
+        var relPos = pos - trimStart;
+        if (relPos < TimeSpan.Zero) relPos = TimeSpan.Zero;
+
+        var relDur = trimEnd - trimStart;
+        if (relDur < TimeSpan.Zero) relDur = TimeSpan.Zero;
+
+        TimeDisplay.Text = $"{relPos:hh\\:mm\\:ss\\.ff} / {relDur:hh\\:mm\\:ss\\.ff}";
     }
 
     private void UpdatePlayPauseIcon()

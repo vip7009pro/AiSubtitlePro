@@ -291,6 +291,14 @@ public partial class MainViewModel : ObservableObject
         return endAbs - startAbs;
     }
 
+    private TimeSpan ClampTimelineTime(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        var end = MediaDuration;
+        if (end > TimeSpan.Zero && t > end) t = end;
+        return t;
+    }
+
     private void ApplyCutToDocument(TimeSpan startAbs, TimeSpan endAbs)
     {
         if (CurrentDocument == null) return;
@@ -1027,10 +1035,14 @@ public partial class MainViewModel : ObservableObject
 
         var doc = CurrentDocument;
 
+        var start = ClampTimelineTime(CurrentPosition);
+        var end = ClampTimelineTime(start + TimeSpan.FromSeconds(2));
+        if (end < start) end = start;
+
         var newLine = new SubtitleLine
         {
-            Start = CurrentPosition,
-            End = CurrentPosition + TimeSpan.FromSeconds(2),
+            Start = start,
+            End = end,
             Text = ""
         };
 
@@ -1270,14 +1282,46 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task TranscribeAudio()
     {
-        var wizard = new TranscriptionWizard();
-        wizard.Owner = Application.Current.MainWindow;
-
-        if (wizard.ShowDialog() == true && wizard.Result != null)
+        // If a media file is loaded, transcribe the currently selected cut range.
+        if (!string.IsNullOrWhiteSpace(MediaFilePath) && File.Exists(MediaFilePath))
         {
-            CurrentDocument = wizard.Result;
-            RefreshDisplayedLines();
-            StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated";
+            if (MediaDurationAbs <= TimeSpan.Zero)
+            {
+                MessageBox.Show("Media is not ready yet. Please wait for the video to finish loading, then try again.", "Transcribe", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var startAbs = CutStartAbs;
+            var endAbs = CutEndAbs;
+            if (startAbs < TimeSpan.Zero) startAbs = TimeSpan.Zero;
+            if (endAbs <= TimeSpan.Zero || endAbs > MediaDurationAbs) endAbs = MediaDurationAbs;
+            var duration = endAbs - startAbs;
+            if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+
+            var wizard = new TranscriptionWizard(mediaFilePath: MediaFilePath, startAbs: startAbs, duration: duration);
+            wizard.Owner = Application.Current.MainWindow;
+
+            if (wizard.ShowDialog() == true && wizard.Result != null)
+            {
+                CurrentDocument = wizard.Result;
+                RefreshDisplayedLines();
+                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated";
+            }
+
+            return;
+        }
+
+        // Fallback: old behavior (choose any file).
+        {
+            var wizard = new TranscriptionWizard();
+            wizard.Owner = Application.Current.MainWindow;
+
+            if (wizard.ShowDialog() == true && wizard.Result != null)
+            {
+                CurrentDocument = wizard.Result;
+                RefreshDisplayedLines();
+                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated";
+            }
         }
     }
 

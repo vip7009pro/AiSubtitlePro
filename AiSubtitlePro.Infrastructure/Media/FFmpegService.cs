@@ -171,6 +171,24 @@ public class FFmpegService : IDisposable
         await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
 
+    public async Task ExtractAudioAsync(
+        string videoPath,
+        string outputPath,
+        TimeSpan start,
+        TimeSpan duration,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+        var startStr = ToFfmpegTime(start);
+        var durStr = ToFfmpegTime(duration);
+
+        // Extract & convert: 16kHz, mono, PCM s16le (Whisper-friendly)
+        var arguments = $"-ss {startStr} -t {durStr} -i \"{videoPath}\" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y \"{outputPath}\"";
+        await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+    }
+
     /// <summary>
     /// Renders hard-subtitles onto video
     /// </summary>
