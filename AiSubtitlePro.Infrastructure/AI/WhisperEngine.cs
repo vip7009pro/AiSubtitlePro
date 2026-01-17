@@ -167,6 +167,7 @@ public class WhisperEngine : IDisposable
                 ReportProgress(10, "Loading Whisper model...", TimeSpan.Zero, duration);
 
                 LogLoadedWhisperDll();
+
                 using var factory = WhisperFactory.FromPath(GetModelPath(_currentModel));
                 var builder = factory.CreateBuilder()
                     .WithLanguage(language == "auto" ? "auto" : language);
@@ -365,16 +366,51 @@ public class WhisperEngine : IDisposable
                 if (string.Equals(m.ModuleName, "whisper.dll", StringComparison.OrdinalIgnoreCase))
                 {
                     Debug.WriteLine($"Loaded whisper.dll from: {m.FileName}");
-                    return;
+                    break;
                 }
             }
-
-            Debug.WriteLine("Loaded whisper.dll from: <not loaded>");
         }
-        catch (Exception ex)
+        catch
         {
-            Debug.WriteLine($"Loaded whisper.dll from: <error: {ex.Message}>");
         }
+    }
+
+    public static string DetectRuntimeUsed()
+    {
+        try
+        {
+            string? whisperPath = null;
+            var hasCudaDeps = false;
+
+            foreach (ProcessModule m in Process.GetCurrentProcess().Modules)
+            {
+                var name = m.ModuleName ?? string.Empty;
+                if (string.Equals(name, "whisper.dll", StringComparison.OrdinalIgnoreCase))
+                    whisperPath = m.FileName;
+
+                if (name.StartsWith("cublas", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("cudart", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("cuda", StringComparison.OrdinalIgnoreCase))
+                    hasCudaDeps = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(whisperPath))
+            {
+                var p = whisperPath.Replace('/', '\\');
+                if (p.Contains("\\cuda\\", StringComparison.OrdinalIgnoreCase) || hasCudaDeps)
+                    return "GPU(CUDA)";
+                if (p.Contains("\\vulkan\\", StringComparison.OrdinalIgnoreCase))
+                    return "GPU(Vulkan)";
+            }
+
+            if (hasCudaDeps)
+                return "GPU(CUDA)";
+        }
+        catch
+        {
+        }
+
+        return "CPU";
     }
 
     public void Dispose()

@@ -297,6 +297,10 @@ public sealed class OpenRouterTranslationService : IDisposable
         return $"Return JSON ONLY with this exact shape (no markdown, no backticks, no extra text):\n{schema}\n\nTranslate the following:\n{payload}";
     }
 
+    public static string BuildSystemPromptPublic(TranslationOptions options) => BuildSystemPrompt(options);
+
+    public static string BuildUserPromptPublic(TranslationOptions options, List<object> items) => BuildUserPrompt(options, items);
+
     private static string ExtractJson(string content)
     {
         if (string.IsNullOrWhiteSpace(content))

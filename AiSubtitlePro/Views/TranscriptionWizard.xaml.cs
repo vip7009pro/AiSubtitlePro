@@ -19,6 +19,7 @@ public partial class TranscriptionWizard : Window
     private readonly TimeSpan? _duration;
     
     public SubtitleDocument? Result { get; private set; }
+    public string RuntimeUsed { get; private set; } = "";
 
     public TranscriptionWizard(string? mediaFilePath = null, TimeSpan? startAbs = null, TimeSpan? duration = null)
     {
@@ -204,6 +205,8 @@ public partial class TranscriptionWizard : Window
                     GetSelectedLanguage(),
                     _cts.Token);
             }
+
+            RuntimeUsed = WhisperEngine.DetectRuntimeUsed();
 
             LogText.Text += $"\nTranscription complete! Generated {Result.Lines.Count} subtitle lines.\n";
             ProgressText.Text = "Complete!";

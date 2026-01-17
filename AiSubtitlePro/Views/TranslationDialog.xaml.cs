@@ -1,5 +1,6 @@
 using AiSubtitlePro.Core.Models;
 using AiSubtitlePro.Infrastructure.AI;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -26,6 +27,41 @@ public partial class TranslationDialog : Window
         _translationService.ProgressChanged += OnProgressChanged;
         _translationService.PromptPrepared += OnPromptPrepared;
         _translationService.RawResponseReceived += OnRawResponseReceived;
+    }
+
+    private void CopyPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var options = new TranslationOptions
+            {
+                SourceLanguage = GetSelectedTag(SourceLangCombo),
+                TargetLanguage = GetSelectedTag(TargetLangCombo),
+                Mode = GetSelectedMode(),
+                CreateBilingual = BilingualCheck.IsChecked == true,
+                PreserveAssTags = PreserveTagsCheck.IsChecked == true,
+                BatchSize = _document.Lines.Count
+            };
+
+            var payloadItems = new List<object>();
+            foreach (var line in _document.Lines)
+            {
+                var text = TranslationService.ExtractTranslatableTextPublic(line.Text, options.PreserveAssTags);
+                payloadItems.Add(new { index = line.Index, text });
+            }
+
+            var system = OpenRouterTranslationService.BuildSystemPromptPublic(options);
+            var user = OpenRouterTranslationService.BuildUserPromptPublic(options, payloadItems);
+
+            var textToCopy = "--- SYSTEM ---\n" + system + "\n\n--- USER ---\n" + user;
+            Clipboard.SetText(textToCopy);
+
+            LogText.Text += $"\n✓ Copied prompt for {_document.Lines.Count} line(s) to clipboard.\n";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to copy prompt:\n{ex.Message}", "Copy Prompt", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void OnPromptPrepared(object? sender, OpenRouterTranslationService.PromptDebugInfo e)

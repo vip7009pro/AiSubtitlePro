@@ -1305,7 +1305,8 @@ public partial class MainViewModel : ObservableObject
             {
                 CurrentDocument = wizard.Result;
                 RefreshDisplayedLines();
-                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated";
+                var rt = string.IsNullOrWhiteSpace(wizard.RuntimeUsed) ? "" : $" ({wizard.RuntimeUsed})";
+                StatusMessage = $"Transcription complete: {CurrentDocument.Lines.Count} lines generated{rt}";
             }
 
             return;
