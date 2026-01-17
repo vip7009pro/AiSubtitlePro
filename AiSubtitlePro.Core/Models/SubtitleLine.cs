@@ -25,6 +25,7 @@ public class SubtitleLine : INotifyPropertyChanged
     private int? _posY;
     private DialogueType _type = DialogueType.Dialogue;
     private bool _isSelected;
+    private bool _useStyleOverride;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -167,6 +168,12 @@ public class SubtitleLine : INotifyPropertyChanged
         set => SetProperty(ref _isSelected, value);
     }
 
+    public bool UseStyleOverride
+    {
+        get => _useStyleOverride;
+        set => SetProperty(ref _useStyleOverride, value);
+    }
+
     /// <summary>
     /// Characters per second (reading speed metric)
     /// </summary>
@@ -200,7 +207,8 @@ public class SubtitleLine : INotifyPropertyChanged
             MarginV = MarginV,
             PosX = PosX,
             PosY = PosY,
-            Type = Type
+            Type = Type,
+            UseStyleOverride = UseStyleOverride
         };
     }
 

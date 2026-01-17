@@ -72,7 +72,7 @@
                 </MenuItem>
                 <MenuItem Header="Open _Media..." Command="{Binding OpenMediaCommand}">
                     <MenuItem.Icon>
-                        <materialDesign:PackIcon Kind="Video" />
+                        <materialDesign:PackIcon Kind="Filmstrip" />
                     </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem Header="_Cut Video..." Command="{Binding CutVideoCommand}">
@@ -92,7 +92,7 @@
                 <Separator />
                 <MenuItem Header="Export _Hard-Sub Video..." Command="{Binding ExportHardSubCommand}">
                     <MenuItem.Icon>
-                        <materialDesign:PackIcon Kind="Video" />
+                        <materialDesign:PackIcon Kind="VideoPlus" />
                     </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem Header="Cancel _Export" Command="{Binding CancelExportHardSubCommand}" IsEnabled="{Binding IsExportingHardSub}">
@@ -211,7 +211,7 @@
                     <materialDesign:PackIcon Kind="ContentSave" Width="20" Height="20" />
                 </Button>
                 <Button ToolTip="Export Hard-Sub Video" Command="{Binding ExportHardSubCommand}" Style="{StaticResource ToolButtonStyle}">
-                    <materialDesign:PackIcon Kind="Video" Width="20" Height="20" />
+                    <materialDesign:PackIcon Kind="VideoPlus" Width="20" Height="20" />
                 </Button>
                 <Button ToolTip="Undo (Ctrl+Z)" Command="{Binding UndoCommand}" IsEnabled="{Binding CanUndo}" Style="{StaticResource ToolButtonStyle}">
                     <materialDesign:PackIcon Kind="Undo" Width="20" Height="20" />
@@ -221,7 +221,7 @@
                 </Button>
                 <Separator />
                 <Button ToolTip="Open Media" Command="{Binding OpenMediaCommand}" Style="{StaticResource ToolButtonStyle}">
-                    <materialDesign:PackIcon Kind="Video" Width="20" Height="20" />
+                    <materialDesign:PackIcon Kind="Filmstrip" Width="20" Height="20" />
                 </Button>
                 <Button ToolTip="Cut Video" Command="{Binding CutVideoCommand}" Style="{StaticResource ToolButtonStyle}">
                     <materialDesign:PackIcon Kind="ContentCut" Width="20" Height="20" />
@@ -306,12 +306,28 @@
                             <StackPanel Grid.Row="0" Margin="0,0,0,8">
                                 <!-- Styles & Actions -->
                                 <DockPanel Margin="0,0,0,8">
-                                    <ComboBox DockPanel.Dock="Left" Width="100" Margin="0,0,8,0"
-                                              Text="{Binding SelectedLine.StyleName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <ComboBox DockPanel.Dock="Left" Width="140" Margin="0,0,8,0"
+                                              ItemsSource="{Binding CurrentDocument.Styles}"
+                                              DisplayMemberPath="Name"
+                                              SelectedValuePath="Name"
+                                              SelectedValue="{Binding SelectedLine.StyleName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                               IsEditable="True"
-                                              ToolTip="Style Name">
-                                         <ComboBoxItem Content="Default" />
-                                    </ComboBox>
+                                              ToolTip="Style Name"
+                                              Background="White" Foreground="#111111" />
+                                    <CheckBox DockPanel.Dock="Left" Content="Override" Margin="0,0,8,0"
+                                              IsChecked="{Binding SelectedLine.UseStyleOverride, Mode=TwoWay}" />
+                                    <Button DockPanel.Dock="Left" ToolTip="Add Style" Command="{Binding AddStyleCommand}"
+                                            Width="28" Height="28" Margin="0,0,4,0" Style="{StaticResource ToolButtonStyle}">
+                                        <materialDesign:PackIcon Kind="Plus" Width="18" Height="18" />
+                                    </Button>
+                                    <Button DockPanel.Dock="Left" ToolTip="Rename Style" Command="{Binding RenameStyleCommand}"
+                                            Width="28" Height="28" Margin="0,0,4,0" Style="{StaticResource ToolButtonStyle}">
+                                        <materialDesign:PackIcon Kind="Pencil" Width="18" Height="18" />
+                                    </Button>
+                                    <Button DockPanel.Dock="Left" ToolTip="Delete Style" Command="{Binding DeleteStyleCommand}"
+                                            Width="28" Height="28" Margin="0,0,8,0" Style="{StaticResource ToolButtonStyle}">
+                                        <materialDesign:PackIcon Kind="Delete" Width="18" Height="18" />
+                                    </Button>
                                     <Button DockPanel.Dock="Left" Content="Apply All" Command="{Binding ApplyStyleToAllCommand}" 
                                             Height="28" Padding="8,0" Margin="0,0,8,0" Style="{StaticResource ToolButtonStyle}" Background="#333"/>
                                     
@@ -323,42 +339,61 @@
                                 </DockPanel>
 
                                 <!-- Time Edits -->
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBox Width="80" Text="{Binding SelectedLine.Start, Mode=TwoWay, StringFormat='h\\:mm\\:ss\\.ff'}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Start Time"/>
-                                    <TextBox Width="80" Text="{Binding SelectedLine.End, Mode=TwoWay, StringFormat='h\\:mm\\:ss\\.ff'}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="End Time"/>
-                                    <TextBlock Text="{Binding SelectedLine.Duration, StringFormat='s\\.ff'}" VerticalAlignment="Center" Foreground="Gray"/>
-                                </StackPanel>
+                                <WrapPanel>
+                                    <TextBlock Text="Start" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLine.Start, Mode=TwoWay, StringFormat='h\:mm\:ss\.ff'}" 
+                                             Margin="0,0,10,0" ToolTip="Start Time"
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"
+                                             BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"/>
+                                    <TextBlock Text="End" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLine.End, Mode=TwoWay, StringFormat='h\:mm\:ss\.ff'}" 
+                                             Margin="0,0,10,0" ToolTip="End Time"
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"
+                                             BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"/>
+                                    <TextBlock Text="Dur" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock Text="{Binding SelectedLine.Duration, StringFormat='s\.ff'}" VerticalAlignment="Center" Foreground="Gray"/>
+                                </WrapPanel>
 
                                 <!-- Style Edits -->
                                 <WrapPanel Margin="0,8,0,0">
                                     <TextBlock Text="Font" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="55" Text="{Binding SelectedStyleFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,8,0" ToolTip="Font Size"
-                                             Background="White" Foreground="#111111" CaretBrush="#111111"/>
+                                    <ComboBox Width="150" Height="26" Margin="0,0,8,0"
+                                              ItemsSource="{Binding InstalledFontFamilies}"
+                                              SelectedItem="{Binding SelectedStyleFontName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              IsEditable="True"
+                                              ToolTip="Font Family"
+                                              Background="White" Foreground="#111111" />
+                                    <TextBlock Text="Size" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBox Width="48" Height="26"
+                                             Text="{Binding SelectedStyleFontSize, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"
+                                             Margin="0,0,12,0" ToolTip="Font Size"
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"
+                                             BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"
+                                             PreviewTextInput="NumericTextBox_PreviewTextInput"
+                                             DataObject.Pasting="NumericTextBox_Pasting" />
 
-                                    <TextBlock Text="Color" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
-                                            Background="{Binding SelectedStylePrimaryAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
-                                    <Button Content="Pick" Click="PickPrimaryColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
-                                    <TextBlock Text="{Binding SelectedStylePrimaryAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
+                                    <TextBlock Text="Text" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Button Width="22" Height="22" Margin="0,0,12,0" Click="PickPrimaryColor_Click"
+                                            Background="{Binding SelectedStylePrimaryAssColor, Converter={StaticResource AssColorToBrushConverter}}"
+                                            BorderBrush="#999" BorderThickness="1" />
 
-                                    <TextBlock Text="Stroke" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="45" Text="{Binding SelectedStyleOutline, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
-                                             Style="{StaticResource MaterialDesignOutlinedTextBox}" Margin="0,0,6,0" ToolTip="Outline"
-                                             Background="White" Foreground="#111111" CaretBrush="#111111"/>
-                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
-                                            Background="{Binding SelectedStyleOutlineAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
-                                    <Button Content="Pick" Click="PickOutlineColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
-                                    <TextBlock Text="{Binding SelectedStyleOutlineAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
+                                    <TextBlock Text="Outline" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBox Width="44" Height="26"
+                                             Text="{Binding SelectedStyleOutline, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"
+                                             Margin="0,0,6,0" ToolTip="Outline"
+                                             Background="White" Foreground="#111111" CaretBrush="#111111"
+                                             BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"
+                                             PreviewTextInput="NumericTextBox_PreviewTextInput"
+                                             DataObject.Pasting="NumericTextBox_Pasting" />
+                                    <Button Width="22" Height="22" Margin="0,0,12,0" Click="PickOutlineColor_Click"
+                                            Background="{Binding SelectedStyleOutlineAssColor, Converter={StaticResource AssColorToBrushConverter}}"
+                                            BorderBrush="#999" BorderThickness="1" />
 
                                     <TextBlock Text="Box" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <Border Width="18" Height="18" Margin="0,0,6,0" BorderBrush="#999" BorderThickness="1"
-                                            Background="{Binding SelectedStyleBackAssColor, Converter={StaticResource AssColorToBrushConverter}}" />
-                                    <Button Content="Pick" Click="PickBackColor_Click" Margin="0,0,6,0" Height="28" Padding="10,0" Style="{StaticResource ToolButtonStyle}" />
-                                    <TextBlock Text="{Binding SelectedStyleBackAssColor}" VerticalAlignment="Center" Foreground="#111111" Margin="0,0,8,0"/>
-                                    <CheckBox Content="Enable" IsChecked="{Binding SelectedStyleBoxEnabled, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                    <Button Width="22" Height="22" Margin="0,0,6,0" Click="PickBackColor_Click"
+                                            Background="{Binding SelectedStyleBackAssColor, Converter={StaticResource AssColorToBrushConverter}}"
+                                            BorderBrush="#999" BorderThickness="1" />
+                                    <CheckBox Content="On" IsChecked="{Binding SelectedStyleBoxEnabled, Mode=TwoWay}" VerticalAlignment="Center"/>
                                 </WrapPanel>
 
                                 <!-- Position -->
@@ -378,6 +413,7 @@
                                      AcceptsReturn="True"
                                      TextWrapping="Wrap"
                                      VerticalScrollBarVisibility="Auto"
+                                     PreviewKeyDown="SubtitleEditBox_PreviewKeyDown"
                                      FontSize="16"
                                      FontFamily="Segoe UI"
                                      Background="White"

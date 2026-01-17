@@ -4,7 +4,11 @@ using System.Windows;
 using Forms = System.Windows.Forms;
 using AiSubtitlePro.Core.Models;
 using AiSubtitlePro.Views;
+using CommunityToolkit.Mvvm.Input;
 using System.Linq;
+using System.Text.RegularExpressions;
+using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace AiSubtitlePro;
 
@@ -14,6 +18,8 @@ namespace AiSubtitlePro;
 public partial class MainWindow : Window
 {
     private MainViewModel? ViewModel => DataContext as MainViewModel;
+
+    private bool _closeConfirmed;
 
     private string? _subtitleEditTextBefore;
 
@@ -47,6 +53,95 @@ public partial class MainWindow : Window
 
         SubtitleGrid.SelectionChanged += SubtitleGrid_SelectionChanged;
         SubtitleGrid.PreviewKeyDown += SubtitleGrid_PreviewKeyDown;
+
+        Closing += MainWindow_Closing;
+    }
+
+    private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_closeConfirmed)
+            return;
+
+        var vm = ViewModel;
+        var doc = vm?.CurrentDocument;
+        if (doc == null || !doc.IsDirty)
+            return;
+
+        var result = MessageBox.Show(
+            "Subtitles have been modified. Do you want to save before closing?",
+            "Unsaved changes",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning);
+
+        if (result == MessageBoxResult.Cancel)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (result == MessageBoxResult.No)
+        {
+            _closeConfirmed = true;
+            return;
+        }
+
+        // Yes: attempt to save. If user cancels Save As, document will remain dirty -> abort closing.
+        try
+        {
+            if (vm?.SaveCommand is IAsyncRelayCommand asyncSave)
+                await asyncSave.ExecuteAsync(null);
+            else if (vm?.SaveCommand?.CanExecute(null) == true)
+                vm.SaveCommand.Execute(null);
+        }
+        catch
+        {
+        }
+
+        if (doc.IsDirty)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _closeConfirmed = true;
+    }
+
+    private static readonly Regex NumericRegex = new(@"^[0-9]*([.][0-9]*)?$", RegexOptions.Compiled);
+
+    private static bool IsValidNumericCandidate(string currentText, string insertText)
+    {
+        var candidate = (currentText ?? string.Empty) + (insertText ?? string.Empty);
+        return NumericRegex.IsMatch(candidate);
+    }
+
+    private void NumericTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is not TextBox tb)
+            return;
+
+        e.Handled = !IsValidNumericCandidate(tb.Text, e.Text);
+    }
+
+    private void NumericTextBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (sender is not TextBox tb)
+            return;
+
+        if (!e.DataObject.GetDataPresent(DataFormats.UnicodeText))
+        {
+            e.CancelCommand();
+            return;
+        }
+
+        var text = e.DataObject.GetData(DataFormats.UnicodeText) as string;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            e.CancelCommand();
+            return;
+        }
+
+        if (!IsValidNumericCandidate(tb.Text, text.Trim()))
+            e.CancelCommand();
     }
 
     private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -295,10 +390,24 @@ public partial class MainWindow : Window
             {
                 // Last line: Create new line
                 ViewModel.AddLineCommand.Execute(null);
-                
-                // Focus the Edit Box to allow immediate typing
-                SubtitleEditBox.Focus();
-                SubtitleEditBox.CaretIndex = SubtitleEditBox.Text.Length;
+
+                // Keep focus in grid and select the newly created row so Enter can be repeated.
+                SubtitleGrid.Dispatcher.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        var newLine = ViewModel.SelectedLine;
+                        if (newLine != null)
+                        {
+                            SubtitleGrid.SelectedItem = newLine;
+                            SubtitleGrid.ScrollIntoView(newLine);
+                        }
+                        SubtitleGrid.Focus();
+                    }
+                    catch
+                    {
+                    }
+                });
             }
             else
             {
@@ -306,6 +415,105 @@ public partial class MainWindow : Window
                 SubtitleGrid.SelectedIndex = index + 1;
                 SubtitleGrid.ScrollIntoView(SubtitleGrid.SelectedItem);
             }
+        }
+    }
+
+    private void SubtitleEditBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        var vm = ViewModel;
+        if (vm == null) return;
+
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0
+            && (e.Key == System.Windows.Input.Key.Up || e.Key == System.Windows.Input.Key.Down))
+        {
+            e.Handled = true;
+
+            var current = vm.SelectedLine;
+            if (current == null)
+                return;
+
+            var index = vm.DisplayedLines.IndexOf(current);
+            if (index < 0)
+                return;
+
+            var nextIndex = e.Key == System.Windows.Input.Key.Up ? index - 1 : index + 1;
+            if (nextIndex < 0) nextIndex = 0;
+            if (nextIndex >= vm.DisplayedLines.Count) nextIndex = vm.DisplayedLines.Count - 1;
+
+            if (nextIndex != index)
+                vm.SelectedLine = vm.DisplayedLines[nextIndex];
+
+            if (vm.SelectedLine != null)
+            {
+                var abs = vm.ToMediaTime(vm.SelectedLine.Start);
+                VideoPlayer.SeekTo(abs);
+                vm.CurrentPosition = vm.SelectedLine.Start;
+            }
+
+            SubtitleGrid.Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (vm.SelectedLine != null)
+                    {
+                        SubtitleGrid.SelectedItem = vm.SelectedLine;
+                        SubtitleGrid.ScrollIntoView(vm.SelectedLine);
+                    }
+
+                    SubtitleEditBox.Focus();
+                    SubtitleEditBox.CaretIndex = SubtitleEditBox.Text?.Length ?? 0;
+                }
+                catch
+                {
+                }
+            });
+
+            return;
+        }
+
+        if (e.Key == System.Windows.Input.Key.Enter
+            && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
+        {
+            // Ctrl+Enter: move to next subtitle and keep editing in the text box.
+            e.Handled = true;
+
+            var current = vm.SelectedLine;
+            if (current == null)
+                return;
+
+            var index = vm.DisplayedLines.IndexOf(current);
+            if (index < 0)
+                return;
+
+            if (index == vm.DisplayedLines.Count - 1)
+            {
+                // Last line: create a new line and select it
+                if (vm.AddLineCommand.CanExecute(null))
+                    vm.AddLineCommand.Execute(null);
+            }
+            else
+            {
+                // Move to next line
+                vm.SelectedLine = vm.DisplayedLines[index + 1];
+            }
+
+            SubtitleGrid.Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (vm.SelectedLine != null)
+                    {
+                        SubtitleGrid.SelectedItem = vm.SelectedLine;
+                        SubtitleGrid.ScrollIntoView(vm.SelectedLine);
+                    }
+
+                    SubtitleEditBox.Focus();
+                    SubtitleEditBox.CaretIndex = SubtitleEditBox.Text?.Length ?? 0;
+                }
+                catch
+                {
+                }
+            });
         }
     }
 

@@ -3,10 +3,12 @@ using AiSubtitlePro.Core.Parsers;
 using AiSubtitlePro.Views;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.VisualBasic;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
 using System.Diagnostics;
 using System.Threading;
 
@@ -121,6 +123,11 @@ public partial class MainViewModel : ObservableObject
     private SubtitleDocument? _cutSourceDocument;
 
     [ObservableProperty]
+    private string _selectedStyleFontName = "Arial";
+
+    public ObservableCollection<string> InstalledFontFamilies { get; } = new();
+
+    [ObservableProperty]
     private double _selectedStyleFontSize;
 
     [ObservableProperty]
@@ -141,6 +148,21 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel()
     {
         TryCleanupTempFiles();
+
+        try
+        {
+            foreach (var f in Fonts.SystemFontFamilies
+                         .Select(ff => ff.Source)
+                         .Where(s => !string.IsNullOrWhiteSpace(s))
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
+            {
+                InstalledFontFamilies.Add(f);
+            }
+        }
+        catch
+        {
+        }
 
         _ffmpegService.ProgressChanged += (_, p) =>
         {
@@ -240,6 +262,191 @@ public partial class MainViewModel : ObservableObject
         StatusMessage = $"Applied style '{styleName}' to all lines";
     }
 
+    [RelayCommand]
+    private void AddStyle()
+    {
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        if (doc == null || line == null) return;
+
+        try
+        {
+            var proposed = Interaction.InputBox("Enter new style name:", "Add Style", "NewStyle");
+            proposed = (proposed ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(proposed))
+                return;
+
+            var name = proposed;
+            var suffix = 1;
+            while (doc.Styles.Any(s => string.Equals(s.Name, name, StringComparison.Ordinal)))
+            {
+                name = $"{proposed}_{suffix}";
+                suffix++;
+            }
+
+            var prevStyleName = line.StyleName;
+            var prevStyles = doc.Styles.Select(s => (s, s.Clone())).ToList();
+
+            _undo.Execute(new DelegateCommand(
+                "Add Style",
+                execute: () =>
+                {
+                    var baseStyle = doc.GetStyle("Default");
+                    var st = baseStyle.Clone();
+                    st.Name = name;
+                    doc.Styles.Add(st);
+                    line.StyleName = name;
+                    line.UseStyleOverride = false;
+                    doc.IsDirty = true;
+                },
+                undo: () =>
+                {
+                    doc.Styles.Clear();
+                    foreach (var (_, clone) in prevStyles)
+                        doc.Styles.Add(clone);
+                    line.StyleName = prevStyleName;
+                    doc.IsDirty = true;
+                }));
+
+            SyncSelectedStyleFromLine();
+            RefreshSubtitlePreview();
+            StatusMessage = $"Added style '{name}'";
+        }
+        catch
+        {
+        }
+    }
+
+    [RelayCommand]
+    private void RenameStyle()
+    {
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        if (doc == null || line == null) return;
+
+        var oldName = string.IsNullOrWhiteSpace(line.StyleName) ? "Default" : line.StyleName;
+        if (string.Equals(oldName, "Default", StringComparison.Ordinal))
+        {
+            MessageBox.Show("Cannot rename the 'Default' style.", "Rename Style", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var style = doc.Styles.FirstOrDefault(s => string.Equals(s.Name, oldName, StringComparison.Ordinal));
+        if (style == null)
+            return;
+
+        var proposed = Interaction.InputBox("Enter new style name:", "Rename Style", oldName);
+        proposed = (proposed ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(proposed) || string.Equals(proposed, oldName, StringComparison.Ordinal))
+            return;
+
+        if (doc.Styles.Any(s => string.Equals(s.Name, proposed, StringComparison.Ordinal)))
+        {
+            MessageBox.Show("A style with that name already exists.", "Rename Style", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var prevStyles = doc.Styles.Select(s => (s, s.Clone())).ToList();
+        var prevLineStyles = doc.Lines.Select(l => (line: l, styleName: l.StyleName)).ToList();
+        var affected = doc.Lines.Where(l => string.Equals(l.StyleName, oldName, StringComparison.Ordinal)).ToList();
+
+        _undo.Execute(new DelegateCommand(
+            "Rename Style",
+            execute: () =>
+            {
+                style.Name = proposed;
+                foreach (var l in affected)
+                    l.StyleName = proposed;
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Styles.Clear();
+                foreach (var (_, clone) in prevStyles)
+                    doc.Styles.Add(clone);
+                foreach (var (ln, styleName) in prevLineStyles)
+                    ln.StyleName = styleName;
+                doc.IsDirty = true;
+            }));
+
+        SyncSelectedStyleFromLine();
+        RefreshSubtitlePreview();
+        StatusMessage = $"Renamed style '{oldName}' -> '{proposed}'";
+    }
+
+    [RelayCommand]
+    private void DeleteStyle()
+    {
+        var doc = CurrentDocument;
+        var line = SelectedLine;
+        if (doc == null || line == null) return;
+
+        var name = string.IsNullOrWhiteSpace(line.StyleName) ? "Default" : line.StyleName;
+        if (string.Equals(name, "Default", StringComparison.Ordinal))
+        {
+            MessageBox.Show("Cannot delete the 'Default' style.", "Delete Style", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var st = doc.Styles.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.Ordinal));
+        if (st == null)
+            return;
+
+        var usedBy = doc.Lines.Where(l => string.Equals(l.StyleName, name, StringComparison.Ordinal)).ToList();
+        if (usedBy.Count > 0)
+        {
+            var r = MessageBox.Show(
+                $"Style '{name}' is used by {usedBy.Count} line(s).\n\nDelete it and move those lines to 'Default'?",
+                "Delete Style",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (r != MessageBoxResult.Yes)
+                return;
+        }
+        else
+        {
+            var r = MessageBox.Show($"Delete style '{name}'?", "Delete Style", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (r != MessageBoxResult.Yes)
+                return;
+        }
+
+        var prevStyles = doc.Styles.Select(s => (s, s.Clone())).ToList();
+        var prevLineStyles = doc.Lines.Select(l => (line: l, styleName: l.StyleName, useOverride: l.UseStyleOverride)).ToList();
+        var prevStyleName = line.StyleName;
+
+        _undo.Execute(new DelegateCommand(
+            "Delete Style",
+            execute: () =>
+            {
+                foreach (var l in usedBy)
+                    l.StyleName = "Default";
+                doc.Styles.Remove(st);
+                if (string.Equals(line.StyleName, name, StringComparison.Ordinal))
+                    line.StyleName = "Default";
+                if (string.Equals(prevStyleName, name, StringComparison.Ordinal))
+                    line.UseStyleOverride = false;
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Styles.Clear();
+                foreach (var (_, clone) in prevStyles)
+                    doc.Styles.Add(clone);
+                line.StyleName = prevStyleName;
+                foreach (var (ln, styleName, useOverride) in prevLineStyles)
+                {
+                    ln.StyleName = styleName;
+                    ln.UseStyleOverride = useOverride;
+                }
+                doc.IsDirty = true;
+            }));
+
+        SyncSelectedStyleFromLine();
+        RefreshSubtitlePreview();
+        StatusMessage = $"Deleted style '{name}'";
+    }
+
     partial void OnCurrentPositionChanged(TimeSpan value)
     {
         if (CurrentDocument != null)
@@ -292,6 +499,49 @@ public partial class MainViewModel : ObservableObject
         try
         {
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+        }
+        catch
+        {
+        }
+    }
+
+    private void HandleSelectedLineOverrideChanged()
+    {
+        try
+        {
+            var doc = CurrentDocument;
+            var line = SelectedLine;
+            if (doc == null || line == null) return;
+
+            if (line.UseStyleOverride)
+            {
+                EnsureLineHasEditableStyle(doc, line);
+                doc.IsDirty = true;
+                return;
+            }
+
+            var styleName = string.IsNullOrWhiteSpace(line.StyleName) ? "Default" : line.StyleName;
+            var marker = "__L";
+            var idx = styleName.IndexOf(marker, StringComparison.Ordinal);
+            if (idx <= 0)
+                return;
+
+            var baseName = styleName[..idx];
+            if (!doc.Styles.Any(s => string.Equals(s.Name, baseName, StringComparison.Ordinal)))
+                return;
+
+            var oldName = styleName;
+            line.StyleName = baseName;
+
+            var stillUsed = doc.Lines.Any(l => string.Equals(l.StyleName, oldName, StringComparison.Ordinal));
+            if (!stillUsed)
+            {
+                var toRemove = doc.Styles.FirstOrDefault(s => string.Equals(s.Name, oldName, StringComparison.Ordinal));
+                if (toRemove != null)
+                    doc.Styles.Remove(toRemove);
+            }
+
+            doc.IsDirty = true;
         }
         catch
         {
@@ -458,11 +708,22 @@ public partial class MainViewModel : ObservableObject
         // Ensure edits (text/style name/pos/timing) reflect immediately on preview
         if (e.PropertyName == nameof(SubtitleLine.Text)
             || e.PropertyName == nameof(SubtitleLine.StyleName)
+            || e.PropertyName == nameof(SubtitleLine.UseStyleOverride)
             || e.PropertyName == nameof(SubtitleLine.PosX)
             || e.PropertyName == nameof(SubtitleLine.PosY)
             || e.PropertyName == nameof(SubtitleLine.Start)
             || e.PropertyName == nameof(SubtitleLine.End))
         {
+            if (e.PropertyName == nameof(SubtitleLine.StyleName))
+            {
+                TryEnsureSelectedLineStyleExists();
+                SyncSelectedStyleFromLine();
+            }
+            else if (e.PropertyName == nameof(SubtitleLine.UseStyleOverride))
+            {
+                HandleSelectedLineOverrideChanged();
+                SyncSelectedStyleFromLine();
+            }
             RefreshSubtitlePreview();
         }
     }
@@ -470,6 +731,12 @@ public partial class MainViewModel : ObservableObject
     public void RefreshSubtitlePreview()
     {
         OnCurrentPositionChanged(CurrentPosition);
+    }
+
+    partial void OnSelectedStyleFontNameChanged(string value)
+    {
+        if (_isSyncingSelectedStyle) return;
+        UpdateSelectedStyle(s => s.FontName = string.IsNullOrWhiteSpace(value) ? "Arial" : value);
     }
 
     partial void OnSelectedStyleFontSizeChanged(double value)
@@ -518,6 +785,7 @@ public partial class MainViewModel : ObservableObject
         _isSyncingSelectedStyle = true;
         try
         {
+            SelectedStyleFontName = style.FontName;
             SelectedStyleFontSize = style.FontSize;
             SelectedStyleOutline = style.Outline;
             SelectedStylePrimaryAssColor = SubtitleStyle.ColorToAss(style.PrimaryColor);
@@ -528,6 +796,33 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             _isSyncingSelectedStyle = false;
+        }
+    }
+
+    private void TryEnsureSelectedLineStyleExists()
+    {
+        try
+        {
+            var doc = CurrentDocument;
+            var line = SelectedLine;
+            if (doc == null || line == null) return;
+
+            var name = string.IsNullOrWhiteSpace(line.StyleName) ? "Default" : line.StyleName;
+            if (!string.Equals(line.StyleName, name, StringComparison.Ordinal))
+                line.StyleName = name;
+
+            if (doc.Styles.Any(s => string.Equals(s.Name, name, StringComparison.Ordinal)))
+                return;
+
+            // Create a new style with this name (cloned from Default) so editing can begin immediately.
+            var baseStyle = doc.GetStyle("Default");
+            var newStyle = baseStyle.Clone();
+            newStyle.Name = name;
+            doc.Styles.Add(newStyle);
+            doc.IsDirty = true;
+        }
+        catch
+        {
         }
     }
 
@@ -544,7 +839,11 @@ public partial class MainViewModel : ObservableObject
             "Edit Style",
             execute: () =>
             {
-                var style = EnsureLineHasEditableStyle(doc, line);
+                // If overriding for this line, ensure the line has its own unique style.
+                // Otherwise, edit the shared style so all lines using it update together.
+                var style = line.UseStyleOverride
+                    ? EnsureLineHasEditableStyle(doc, line)
+                    : doc.GetStyle(line.StyleName);
                 mutator(style);
                 doc.IsDirty = true;
             },
@@ -1425,7 +1724,25 @@ public partial class MainViewModel : ObservableObject
 
         var doc = CurrentDocument;
 
-        var start = ClampTimelineTime(CurrentPosition);
+        // Insert after selected line or at end.
+        // New line timing: Start = End of previous line; End = Start + 2 seconds.
+        var insertIndex = SelectedLine != null
+            ? CurrentDocument.Lines.IndexOf(SelectedLine) + 1
+            : CurrentDocument.Lines.Count;
+
+        SubtitleLine? anchor = null;
+        if (SelectedLine != null)
+        {
+            anchor = SelectedLine;
+        }
+        else if (doc.Lines.Count > 0)
+        {
+            anchor = doc.Lines[^1];
+        }
+
+        var start = anchor != null
+            ? ClampTimelineTime(anchor.End)
+            : ClampTimelineTime(CurrentPosition);
         var end = ClampTimelineTime(start + TimeSpan.FromSeconds(2));
         if (end < start) end = start;
 
@@ -1435,11 +1752,6 @@ public partial class MainViewModel : ObservableObject
             End = end,
             Text = ""
         };
-
-        // Insert after selected line or at end
-        var insertIndex = SelectedLine != null 
-            ? CurrentDocument.Lines.IndexOf(SelectedLine) + 1 
-            : CurrentDocument.Lines.Count;
 
         _undo.Execute(new DelegateCommand(
             "Add Line",
