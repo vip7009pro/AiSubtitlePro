@@ -3,6 +3,7 @@ using AiSubtitlePro.Infrastructure.AI;
 using Microsoft.Win32;
 using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace AiSubtitlePro.Views;
 
@@ -23,6 +24,9 @@ public partial class TranscriptionWizard : Window
     public TimeSpan Elapsed { get; private set; }
 
     private readonly System.Diagnostics.Stopwatch _transcribeStopwatch = new();
+
+    private DispatcherTimer? _elapsedTimer;
+    private string _progressStatus = "";
 
     public TranscriptionWizard(string? mediaFilePath = null, TimeSpan? startAbs = null, TimeSpan? duration = null)
     {
@@ -181,11 +185,13 @@ public partial class TranscriptionWizard : Window
         BackButton.IsEnabled = false;
 
         _transcribeStopwatch.Restart();
+        StartElapsedTimer();
 
         try
         {
             LogText.Text = "Loading Whisper model...\n";
-            ProgressText.Text = "Loading model...";
+            _progressStatus = "Loading model...";
+            ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             ProgressBar.IsIndeterminate = true;
 
             await _whisperEngine.LoadModelAsync(GetSelectedModel(), _cts.Token);
@@ -193,6 +199,7 @@ public partial class TranscriptionWizard : Window
             ProgressBar.IsIndeterminate = false;
             LogText.Text += "Model loaded successfully.\n";
             LogText.Text += $"Starting transcription of: {Path.GetFileName(FilePathBox.Text)}\n";
+            _progressStatus = "Transcribing...";
 
             if (_fixedMediaPath != null && _startAbs.HasValue && _duration.HasValue)
             {
@@ -215,7 +222,8 @@ public partial class TranscriptionWizard : Window
             Elapsed = _transcribeStopwatch.Elapsed;
 
             LogText.Text += $"\nTranscription complete! Generated {Result.Lines.Count} subtitle lines.\n";
-            ProgressText.Text = $"Complete! (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
+            _progressStatus = "Complete!";
+            ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             ProgressBar.Value = 100;
 
             NextButton.IsEnabled = true;
@@ -225,19 +233,53 @@ public partial class TranscriptionWizard : Window
         {
             LogText.Text += "\nTranscription cancelled.";
             Elapsed = _transcribeStopwatch.Elapsed;
-            ProgressText.Text = $"Cancelled (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
+            _progressStatus = "Cancelled";
+            ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
         }
         catch (Exception ex)
         {
             LogText.Text += $"\nError: {ex.Message}";
             Elapsed = _transcribeStopwatch.Elapsed;
-            ProgressText.Text = $"Error occurred (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
+            _progressStatus = "Error occurred";
+            ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             MessageBox.Show($"Transcription failed:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
+            StopElapsedTimer();
             BackButton.IsEnabled = true;
+        }
+    }
+
+    private void StartElapsedTimer()
+    {
+        StopElapsedTimer();
+
+        _elapsedTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(200)
+        };
+        _elapsedTimer.Tick += (_, __) =>
+        {
+            if (_transcribeStopwatch.IsRunning)
+                ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
+        };
+        _elapsedTimer.Start();
+    }
+
+    private void StopElapsedTimer()
+    {
+        try
+        {
+            if (_elapsedTimer != null)
+            {
+                _elapsedTimer.Stop();
+                _elapsedTimer = null;
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -246,7 +288,8 @@ public partial class TranscriptionWizard : Window
         Dispatcher.Invoke(() =>
         {
             ProgressBar.Value = e.ProgressPercent;
-            ProgressText.Text = $"{e.Status} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
+            _progressStatus = e.Status;
+            ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
 
             if (e.CurrentSegment != null)
             {
@@ -266,6 +309,7 @@ public partial class TranscriptionWizard : Window
     protected override void OnClosed(EventArgs e)
     {
         _cts?.Cancel();
+        StopElapsedTimer();
         _whisperEngine.Dispose();
         base.OnClosed(e);
     }

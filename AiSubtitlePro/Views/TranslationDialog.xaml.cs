@@ -3,6 +3,7 @@ using AiSubtitlePro.Infrastructure.AI;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 
 namespace AiSubtitlePro.Views;
 
@@ -15,6 +16,9 @@ public partial class TranslationDialog : Window
     private readonly SubtitleDocument _document;
     private CancellationTokenSource? _cts;
     private readonly System.Diagnostics.Stopwatch _translateStopwatch = new();
+
+    private DispatcherTimer? _elapsedTimer;
+    private string _progressStatus = "";
 
     private bool _isTranslating;
 
@@ -108,6 +112,7 @@ public partial class TranslationDialog : Window
         _isTranslating = true;
 
         _translateStopwatch.Restart();
+        StartElapsedTimer();
 
         TranslateButton.IsEnabled = false;
         CancelButton.Content = "Cancel";
@@ -120,7 +125,8 @@ public partial class TranslationDialog : Window
                 throw new Exception("OpenRouter API key is missing. Please set it in AI -> OpenRouter API Key...");
 
             LogText.Text = "Connecting to OpenRouter...\n";
-            ProgressText.Text = "Preparing request...";
+            _progressStatus = "Preparing request...";
+            ProgressText.Text = $"{_progressStatus} - elapsed {FormatElapsed(_translateStopwatch.Elapsed)}";
 
             var options = new TranslationOptions
             {
@@ -138,7 +144,8 @@ public partial class TranslationDialog : Window
             Result = await _translationService.TranslateDocumentAsync(_document, options, apiKey, model, _cts.Token);
 
             LogText.Text += $"\n✓ Translation complete! (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})\n";
-            ProgressText.Text = "Complete!";
+            _progressStatus = "Complete!";
+            ProgressText.Text = $"{_progressStatus} - elapsed {FormatElapsed(_translateStopwatch.Elapsed)}";
             ProgressBar.Value = 100;
 
             DialogResult = true;
@@ -147,21 +154,55 @@ public partial class TranslationDialog : Window
         catch (OperationCanceledException)
         {
             LogText.Text += $"\n❌ Translation cancelled. (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
-            ProgressText.Text = $"Cancelled (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
+            _progressStatus = "Cancelled";
+            ProgressText.Text = $"{_progressStatus} - elapsed {FormatElapsed(_translateStopwatch.Elapsed)}";
         }
         catch (Exception ex)
         {
             LogText.Text += $"\n❌ Error: {ex.Message}";
-            ProgressText.Text = $"Error occurred (elapsed {FormatElapsed(_translateStopwatch.Elapsed)})";
+            _progressStatus = "Error occurred";
+            ProgressText.Text = $"{_progressStatus} - elapsed {FormatElapsed(_translateStopwatch.Elapsed)}";
             MessageBox.Show($"Translation failed:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
+            StopElapsedTimer();
             _isTranslating = false;
             TranslateButton.IsEnabled = true;
             TranslateButton.Content = "Start Translation";
             CancelButton.Content = "Cancel";
+        }
+    }
+
+    private void StartElapsedTimer()
+    {
+        StopElapsedTimer();
+
+        _elapsedTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(200)
+        };
+        _elapsedTimer.Tick += (_, __) =>
+        {
+            if (_isTranslating)
+                ProgressText.Text = $"{_progressStatus} - elapsed {FormatElapsed(_translateStopwatch.Elapsed)}";
+        };
+        _elapsedTimer.Start();
+    }
+
+    private void StopElapsedTimer()
+    {
+        try
+        {
+            if (_elapsedTimer != null)
+            {
+                _elapsedTimer.Stop();
+                _elapsedTimer = null;
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -212,7 +253,8 @@ public partial class TranslationDialog : Window
         {
             ProgressBar.Value = e.ProgressPercent;
             var elapsed = FormatElapsed(_translateStopwatch.Elapsed);
-            ProgressText.Text = $"{e.Status} ({e.CompletedLines}/{e.TotalLines}) - elapsed {elapsed}";
+            _progressStatus = $"{e.Status} ({e.CompletedLines}/{e.TotalLines})";
+            ProgressText.Text = $"{_progressStatus} - elapsed {elapsed}";
         });
     }
 
@@ -227,6 +269,7 @@ public partial class TranslationDialog : Window
     protected override void OnClosed(EventArgs e)
     {
         _cts?.Cancel();
+        StopElapsedTimer();
         _translationService.Dispose();
         base.OnClosed(e);
     }

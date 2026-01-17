@@ -24,6 +24,9 @@ public unsafe class VideoEngine : IDisposable
     private int _height;
     private int _stride;
 
+    private int _renderGeneration;
+    private bool _isDisposed;
+
     // Audio-master model: VideoEngine has no internal clock.
     // Rendering is driven by an external master time (audio device clock).
 
@@ -93,6 +96,7 @@ public unsafe class VideoEngine : IDisposable
     {
         if (_writeableBitmap == null) return;
         if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+        if (_isDisposed) return;
 
         if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
         if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
@@ -118,12 +122,33 @@ public unsafe class VideoEngine : IDisposable
             }
         }
 
+        // Capture locals so Dispose/Unload can't null/zero them while a UI callback is pending.
+        var wb = _writeableBitmap;
+        var buffer = _compositedBuffer;
+        var width = _width;
+        var height = _height;
+        var stride = _stride;
+        var gen = _renderGeneration;
+
         _uiDispatcher?.Invoke(() =>
         {
-            if (_writeableBitmap == null) return;
-            _writeableBitmap.Lock();
-            _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
-            _writeableBitmap.Unlock();
+            try
+            {
+                if (_isDisposed) return;
+                if (gen != _renderGeneration) return;
+                if (!ReferenceEquals(wb, _writeableBitmap)) return;
+                if (buffer != _compositedBuffer) return;
+                if (wb == null) return;
+                if (buffer == IntPtr.Zero) return;
+                if (width <= 0 || height <= 0 || stride <= 0) return;
+
+                wb.Lock();
+                wb.WritePixels(new Int32Rect(0, 0, width, height), buffer, stride * height, stride);
+                wb.Unlock();
+            }
+            catch
+            {
+            }
         });
     }
 
@@ -177,6 +202,7 @@ public unsafe class VideoEngine : IDisposable
     {
         if (_writeableBitmap == null) return;
         if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+        if (_isDisposed) return;
 
         if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
         if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
@@ -203,12 +229,33 @@ public unsafe class VideoEngine : IDisposable
             }
         }
 
+        // Capture locals so Dispose/Unload can't null/zero them while a UI callback is pending.
+        var wb = _writeableBitmap;
+        var buffer = _compositedBuffer;
+        var width = _width;
+        var height = _height;
+        var stride = _stride;
+        var gen = _renderGeneration;
+
         _uiDispatcher?.BeginInvoke(() =>
         {
-            if (_writeableBitmap == null) return;
-            _writeableBitmap.Lock();
-            _writeableBitmap.WritePixels(new Int32Rect(0, 0, _width, _height), _compositedBuffer, _stride * _height, _stride);
-            _writeableBitmap.Unlock();
+            try
+            {
+                if (_isDisposed) return;
+                if (gen != _renderGeneration) return;
+                if (!ReferenceEquals(wb, _writeableBitmap)) return;
+                if (buffer != _compositedBuffer) return;
+                if (wb == null) return;
+                if (buffer == IntPtr.Zero) return;
+                if (width <= 0 || height <= 0 || stride <= 0) return;
+
+                wb.Lock();
+                wb.WritePixels(new Int32Rect(0, 0, width, height), buffer, stride * height, stride);
+                wb.Unlock();
+            }
+            catch
+            {
+            }
         });
     }
 
@@ -252,6 +299,8 @@ public unsafe class VideoEngine : IDisposable
 
     private void RecreateBuffers()
     {
+        _renderGeneration++;
+
         if (_compositedBuffer != IntPtr.Zero)
         {
             Marshal.FreeHGlobal(_compositedBuffer);
@@ -373,8 +422,17 @@ public unsafe class VideoEngine : IDisposable
 
     public void Dispose()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+        _renderGeneration++;
+
         _assRenderer?.Dispose();
         _decoder.Dispose();
+
+        _writeableBitmap = null;
+        _width = 0;
+        _height = 0;
+        _stride = 0;
 
         if (_compositedBuffer != IntPtr.Zero)
         {

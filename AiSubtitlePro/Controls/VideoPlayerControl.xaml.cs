@@ -188,6 +188,60 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         }
     }
 
+    private void UnloadMedia()
+    {
+        try
+        {
+            Pause();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            DetachRenderLoop();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            CloseAudioClock();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            _videoEngine?.Dispose();
+        }
+        catch
+        {
+        }
+        _videoEngine = null;
+
+        try
+        {
+            VideoImage.Source = null;
+        }
+        catch
+        {
+        }
+
+        Duration = TimeSpan.Zero;
+        Position = TimeSpan.Zero;
+        IsPlaying = false;
+        _lastRenderedTime = TimeSpan.MinValue;
+        _renderOnceRequested = false;
+
+        NoMediaOverlay.Visibility = Visibility.Visible;
+        UpdatePlayPauseIcon();
+        UpdateTimeDisplay();
+    }
+
     private void AttachRenderLoop()
     {
         if (_isRenderingAttached) return;
@@ -330,9 +384,21 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
     private void LoadMedia(string? path)
     {
-        if (string.IsNullOrEmpty(path) || _videoEngine == null)
+        if (string.IsNullOrEmpty(path))
         {
-            Log($"VideoPlayerControl: LoadMedia skipped. path='{path}', engineNull={_videoEngine == null}");
+            Log($"VideoPlayerControl: LoadMedia unload (null/empty source). path='{path}'");
+            UnloadMedia();
+            return;
+        }
+
+        if (_videoEngine == null)
+        {
+            InitializeEngine();
+        }
+
+        if (_videoEngine == null)
+        {
+            Log($"VideoPlayerControl: LoadMedia aborted - engine null after init. path='{path}'");
             return;
         }
 
