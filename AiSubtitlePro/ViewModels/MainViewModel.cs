@@ -13,6 +13,7 @@ using System.Threading;
 using AiSubtitlePro.Infrastructure.Media;
 using System.Globalization;
 using System.Text;
+using System.Security.Cryptography;
 using AiSubtitlePro.Services;
 
 namespace AiSubtitlePro.ViewModels;
@@ -139,6 +140,8 @@ public partial class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
+        TryCleanupTempFiles();
+
         _ffmpegService.ProgressChanged += (_, p) =>
         {
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
@@ -262,6 +265,36 @@ public partial class MainViewModel : ObservableObject
                 : string.Empty;
 
             ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
+        }
+    }
+
+    private static string? TryComputeWaveformCacheKey(string mediaPath)
+    {
+        try
+        {
+            var fi = new FileInfo(mediaPath);
+            if (!fi.Exists) return null;
+
+            var payload = $"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+            var bytes = Encoding.UTF8.GetBytes(payload);
+
+            var hash = SHA256.HashData(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TryTouchFileUtc(string path)
+    {
+        try
+        {
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+        }
+        catch
+        {
         }
     }
 
@@ -818,6 +851,8 @@ public partial class MainViewModel : ObservableObject
 
     private async Task GenerateWaveformAsync(string videoPath)
     {
+        TryCleanupTempFiles();
+
         var acquired = await _ffmpegGate.WaitAsync(0);
         if (!acquired)
         {
@@ -837,11 +872,50 @@ public partial class MainViewModel : ObservableObject
             var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
             Directory.CreateDirectory(tempDir);
 
+            // Waveform cache: avoid re-extracting if media hasn't changed.
+            var cacheKey = TryComputeWaveformCacheKey(videoPath);
+            if (!string.IsNullOrWhiteSpace(cacheKey))
+            {
+                var cachedWavPath = Path.Combine(tempDir, $"waveform_{cacheKey}.wav");
+                if (File.Exists(cachedWavPath))
+                {
+                    WaveformAudioPath = null;
+                    WaveformAudioPath = cachedWavPath;
+                    TryTouchFileUtc(cachedWavPath);
+                    success = true;
+                    return;
+                }
+            }
+
             // Use a unique path to ensure WPF binding updates and to avoid stale waveform caches.
-            var wavPath = Path.Combine(tempDir, $"{Path.GetFileNameWithoutExtension(videoPath)}_{Guid.NewGuid():N}.wav");
+            var wavPath = Path.Combine(tempDir, $"waveform_tmp_{Guid.NewGuid():N}.wav");
 
             WaveformAudioPath = null;
             await _ffmpegService.ExtractAudioAsync(videoPath, wavPath);
+
+            if (!string.IsNullOrWhiteSpace(cacheKey))
+            {
+                var cachedWavPath = Path.Combine(tempDir, $"waveform_{cacheKey}.wav");
+                try
+                {
+                    if (File.Exists(cachedWavPath))
+                        File.Delete(cachedWavPath);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    File.Move(wavPath, cachedWavPath);
+                    wavPath = cachedWavPath;
+                    TryTouchFileUtc(wavPath);
+                }
+                catch
+                {
+                    // If move fails (locked, antivirus, etc.), fall back to using tmp wav.
+                }
+            }
 
             WaveformAudioPath = wavPath;
             success = true;
@@ -864,6 +938,70 @@ public partial class MainViewModel : ObservableObject
             }
             if (acquired)
                 _ffmpegGate.Release();
+        }
+    }
+
+    private static void TryCleanupTempFiles()
+    {
+        try
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
+            if (!Directory.Exists(tempDir))
+                return;
+
+            var maxAge = TimeSpan.FromDays(7);
+            var cutoffUtc = DateTime.UtcNow - maxAge;
+
+            var files = Directory.EnumerateFiles(tempDir, "*", SearchOption.TopDirectoryOnly)
+                .Select(p =>
+                {
+                    try
+                    {
+                        var fi = new FileInfo(p);
+                        return (path: p, lastWriteUtc: fi.LastWriteTimeUtc, length: fi.Exists ? fi.Length : 0L);
+                    }
+                    catch
+                    {
+                        return (path: p, lastWriteUtc: DateTime.MinValue, length: 0L);
+                    }
+                })
+                .ToList();
+
+            foreach (var f in files)
+            {
+                if (f.lastWriteUtc != DateTime.MinValue && f.lastWriteUtc < cutoffUtc)
+                {
+                    try { File.Delete(f.path); } catch { }
+                }
+            }
+
+            const int maxFilesToKeep = 200;
+            var remaining = Directory.EnumerateFiles(tempDir, "*", SearchOption.TopDirectoryOnly)
+                .Select(p =>
+                {
+                    try
+                    {
+                        var fi = new FileInfo(p);
+                        return (path: p, lastWriteUtc: fi.LastWriteTimeUtc);
+                    }
+                    catch
+                    {
+                        return (path: p, lastWriteUtc: DateTime.MinValue);
+                    }
+                })
+                .OrderByDescending(x => x.lastWriteUtc)
+                .ToList();
+
+            if (remaining.Count > maxFilesToKeep)
+            {
+                foreach (var f in remaining.Skip(maxFilesToKeep))
+                {
+                    try { File.Delete(f.path); } catch { }
+                }
+            }
+        }
+        catch
+        {
         }
     }
 

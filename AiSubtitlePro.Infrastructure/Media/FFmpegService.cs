@@ -166,7 +166,7 @@ public class FFmpegService : IDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Extract audio to 16kHz mono WAV (optimal for Whisper)
-        var arguments = $"-i \"{videoPath}\" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y \"{outputPath}\"";
+        var arguments = $"-hide_banner -nostdin -loglevel error -threads 0 -i \"{videoPath}\" -vn -sn -dn -acodec pcm_s16le -ar 16000 -ac 1 -y \"{outputPath}\"";
 
         await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
@@ -185,7 +185,7 @@ public class FFmpegService : IDisposable
         var durStr = ToFfmpegTime(duration);
 
         // Extract & convert: 16kHz, mono, PCM s16le (Whisper-friendly)
-        var arguments = $"-ss {startStr} -t {durStr} -i \"{videoPath}\" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y \"{outputPath}\"";
+        var arguments = $"-hide_banner -nostdin -loglevel error -threads 0 -ss {startStr} -t {durStr} -i \"{videoPath}\" -vn -sn -dn -acodec pcm_s16le -ar 16000 -ac 1 -y \"{outputPath}\"";
         await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
 
