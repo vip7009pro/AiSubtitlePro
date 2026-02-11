@@ -276,6 +276,138 @@ public class FFmpegService : IDisposable
         throw lastError ?? new Exception("FFmpeg hard-sub export failed");
     }
 
+    public async Task RenderHardSubVerticalBlurAsync(
+        string videoPath,
+        string subtitlePath,
+        string outputPath,
+        int width,
+        int height,
+        int blurSigma,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var escapedSubPath = subtitlePath
+            .Replace("\\", "/")
+            .Replace(":", "\\:");
+
+        // Build a 9:16 canvas and fill unused area by blurring the same video.
+        // Then scale original video to fit (preserve aspect), burn subtitles on foreground,
+        // and overlay centered on the blurred background.
+        // Use filter_complex + mapping to avoid FFmpeg "Invalid argument" on some builds.
+        var fc =
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blurSigma}[bg];" +
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,ass='{escapedSubPath}'[fg];" +
+            $"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]";
+
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
+
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var arguments = $"-i \"{videoPath}\" -filter_complex \"{fc}\" -map \"[v]\" -map 0:a? -c:v {vcodec} -c:a copy -y \"{outputPath}\"";
+                await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg vertical hard-sub export failed");
+    }
+
+    public async Task RenderHardSubVerticalBlurAsync(
+        string videoPath,
+        string subtitlePath,
+        string outputPath,
+        TimeSpan start,
+        TimeSpan duration,
+        int width,
+        int height,
+        int blurSigma,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var escapedSubPath = subtitlePath
+            .Replace("\\", "/")
+            .Replace(":", "\\:");
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+        var startStr = ToFfmpegTime(start);
+        var durStr = ToFfmpegTime(duration);
+
+        var fc =
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blurSigma}[bg];" +
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,ass='{escapedSubPath}'[fg];" +
+            $"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]";
+
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
+
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var arguments = $"-ss {startStr} -t {durStr} -i \"{videoPath}\" -filter_complex \"{fc}\" -map \"[v]\" -map 0:a? -c:v {vcodec} -c:a copy -y \"{outputPath}\"";
+                await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg vertical hard-sub export failed");
+    }
+
+    public async Task GenerateVerticalPreviewJpgAsync(
+        string videoPath,
+        string subtitlePath,
+        string outputJpgPath,
+        TimeSpan time,
+        int blurSigma,
+        int width,
+        int height,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var escapedSubPath = subtitlePath
+            .Replace("\\", "/")
+            .Replace(":", "\\:");
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+        var timeStr = ToFfmpegTime(time);
+
+        var fc =
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blurSigma}[bg];" +
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,ass='{escapedSubPath}'[fg];" +
+            $"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]";
+
+        var arguments = $"-ss {timeStr} -i \"{videoPath}\" -filter_complex \"{fc}\" -map \"[v]\" -vframes 1 -q:v 2 -y \"{outputJpgPath}\"";
+        await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+    }
+
     public async Task RenderHardSubAsync(
         string videoPath,
         string subtitlePath,

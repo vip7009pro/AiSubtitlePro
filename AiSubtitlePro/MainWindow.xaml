@@ -11,7 +11,10 @@
         Height="900" Width="1400"
         MinHeight="600" MinWidth="1000"
         WindowStartupLocation="CenterScreen"
-        Background="{DynamicResource MaterialDesignPaper}">
+        Background="{DynamicResource MaterialDesignPaper}"
+        AllowDrop="True"
+        DragOver="MainWindow_DragOver"
+        Drop="MainWindow_Drop">
     
     <Window.DataContext>
         <viewmodels:MainViewModel />
@@ -341,12 +344,12 @@
                                 <!-- Time Edits -->
                                 <WrapPanel>
                                     <TextBlock Text="Start" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLine.Start, Mode=TwoWay, StringFormat='h\:mm\:ss\.ff'}" 
+                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLineStartText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
                                              Margin="0,0,10,0" ToolTip="Start Time"
                                              Background="White" Foreground="#111111" CaretBrush="#111111"
                                              BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"/>
                                     <TextBlock Text="End" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLine.End, Mode=TwoWay, StringFormat='h\:mm\:ss\.ff'}" 
+                                    <TextBox Width="72" Height="26" Text="{Binding SelectedLineEndText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
                                              Margin="0,0,10,0" ToolTip="End Time"
                                              Background="White" Foreground="#111111" CaretBrush="#111111"
                                              BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"/>

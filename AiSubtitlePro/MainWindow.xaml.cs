@@ -6,9 +6,11 @@ using AiSubtitlePro.Core.Models;
 using AiSubtitlePro.Views;
 using CommunityToolkit.Mvvm.Input;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.IO;
 
 namespace AiSubtitlePro;
 
@@ -55,6 +57,95 @@ public partial class MainWindow : Window
         SubtitleGrid.PreviewKeyDown += SubtitleGrid_PreviewKeyDown;
 
         Closing += MainWindow_Closing;
+    }
+
+    private static readonly string[] SubtitleExtensions = [".ass", ".ssa", ".srt", ".vtt"];
+    private static readonly string[] MediaExtensions = [
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm",
+        ".mp3", ".wav", ".flac", ".aac", ".m4a"
+    ];
+
+    private void MainWindow_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DragDropEffects.None;
+        e.Handled = true;
+
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+            return;
+
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
+            return;
+
+        var file = files.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f));
+        if (string.IsNullOrWhiteSpace(file))
+            return;
+
+        var ext = Path.GetExtension(file).ToLowerInvariant();
+        if (SubtitleExtensions.Contains(ext) || MediaExtensions.Contains(ext))
+            e.Effects = DragDropEffects.Copy;
+    }
+
+    private async void MainWindow_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+            return;
+
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0)
+            return;
+
+        var vm = ViewModel;
+        if (vm == null)
+            return;
+
+        var existingFiles = files.Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToList();
+        if (existingFiles.Count == 0)
+            return;
+
+        var media = existingFiles.FirstOrDefault(f => MediaExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+        var subtitle = existingFiles.FirstOrDefault(f => SubtitleExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(media))
+            {
+                await vm.OpenMediaFromPathAsync(media);
+
+                if (!string.IsNullOrWhiteSpace(subtitle))
+                {
+                    await HandleSubtitleDropAsync(vm, subtitle);
+                }
+
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(subtitle))
+            {
+                await HandleSubtitleDropAsync(vm, subtitle);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Không thể mở file:\n{ex.Message}", "Open", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static async Task HandleSubtitleDropAsync(MainViewModel vm, string subtitlePath)
+    {
+        var hasAnyLines = vm.CurrentDocument?.Lines?.Count > 0;
+
+        if (hasAnyLines)
+        {
+            var result = MessageBox.Show(
+                "Bạn có muốn đè subtitle hiện tại bằng file subtitle vừa kéo vào không?",
+                "Đè subtitle",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+                return;
+        }
+
+        await vm.OpenSubtitleFromPathAsync(subtitlePath);
     }
 
     private async void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)

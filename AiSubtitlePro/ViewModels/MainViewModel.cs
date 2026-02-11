@@ -50,6 +50,12 @@ public partial class MainViewModel : ObservableObject
     private SubtitleLine? _selectedLine;
 
     [ObservableProperty]
+    private string _selectedLineStartText = string.Empty;
+
+    [ObservableProperty]
+    private string _selectedLineEndText = string.Empty;
+
+    [ObservableProperty]
     private string _statusMessage = "Ready";
 
     [ObservableProperty]
@@ -315,6 +321,17 @@ public partial class MainViewModel : ObservableObject
         catch
         {
         }
+    }
+
+    public async Task OpenSubtitleFromPathAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            return;
+
+        if (!ConfirmDiscardChanges())
+            return;
+
+        await LoadSubtitleAsync(filePath);
     }
 
     [RelayCommand]
@@ -699,6 +716,9 @@ public partial class MainViewModel : ObservableObject
         if (_selectedLineHook != null)
             _selectedLineHook.PropertyChanged += SelectedLine_PropertyChanged;
 
+        SelectedLineStartText = value != null ? FormatTime(value.Start) : string.Empty;
+        SelectedLineEndText = value != null ? FormatTime(value.End) : string.Empty;
+
         SyncSelectedStyleFromLine();
         RefreshSubtitlePreview();
     }
@@ -725,6 +745,89 @@ public partial class MainViewModel : ObservableObject
                 SyncSelectedStyleFromLine();
             }
             RefreshSubtitlePreview();
+        }
+
+        if (sender == SelectedLine)
+        {
+            if (e.PropertyName == nameof(SubtitleLine.Start))
+                SelectedLineStartText = SelectedLine != null ? FormatTime(SelectedLine.Start) : string.Empty;
+            else if (e.PropertyName == nameof(SubtitleLine.End))
+                SelectedLineEndText = SelectedLine != null ? FormatTime(SelectedLine.End) : string.Empty;
+        }
+    }
+
+    partial void OnSelectedLineStartTextChanged(string value)
+    {
+        if (SelectedLine == null) return;
+        if (!TryParseTime(value, out var ts)) return;
+        if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
+        SelectedLine.Start = ts;
+        if (SelectedLine.End < SelectedLine.Start)
+            SelectedLine.End = SelectedLine.Start;
+        CurrentDocument!.IsDirty = true;
+    }
+
+    partial void OnSelectedLineEndTextChanged(string value)
+    {
+        if (SelectedLine == null) return;
+        if (!TryParseTime(value, out var ts)) return;
+        if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
+        if (ts < SelectedLine.Start) ts = SelectedLine.Start;
+        SelectedLine.End = ts;
+        CurrentDocument!.IsDirty = true;
+    }
+
+    private static bool TryParseTime(string? text, out TimeSpan ts)
+    {
+        ts = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var t = text.Trim();
+
+        // Accept: h:mm:ss.ff | mm:ss.ff | ss.ff
+        // Convert last segment fractional separator to milliseconds.
+        var parts = t.Split(':');
+        int h = 0, m = 0;
+        double s = 0;
+
+        if (parts.Length == 3)
+        {
+            if (!int.TryParse(parts[0], out h)) return false;
+            if (!int.TryParse(parts[1], out m)) return false;
+            if (!double.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out s)) return false;
+        }
+        else if (parts.Length == 2)
+        {
+            if (!int.TryParse(parts[0], out m)) return false;
+            if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out s)) return false;
+        }
+        else if (parts.Length == 1)
+        {
+            if (!double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out s)) return false;
+        }
+        else
+        {
+            return false;
+        }
+
+        var wholeSeconds = (int)Math.Floor(s);
+        var frac = s - wholeSeconds;
+        var ms = (int)Math.Round(frac * 1000);
+        if (ms >= 1000)
+        {
+            ms -= 1000;
+            wholeSeconds += 1;
+        }
+
+        try
+        {
+            ts = new TimeSpan(0, h, m, wholeSeconds, ms);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -1063,6 +1166,29 @@ public partial class MainViewModel : ObservableObject
 
             await GenerateWaveformAsync(MediaFilePath);
         }
+    }
+
+    public async Task OpenMediaFromPathAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            return;
+
+        if (!ConfirmDiscardChanges())
+            return;
+
+        // Dropping media is treated as starting a new project.
+        CurrentDocument = SubtitleDocument.CreateNew();
+        RefreshDisplayedLines();
+
+        MediaFilePath = filePath;
+        StatusMessage = $"Loaded media: {Path.GetFileName(filePath)}";
+
+        // Reset cut range when opening new media.
+        CutStartAbs = TimeSpan.Zero;
+        CutEndAbs = TimeSpan.Zero;
+        _cutSourceDocument = null;
+
+        await GenerateWaveformAsync(MediaFilePath);
     }
 
     [RelayCommand]
@@ -1580,18 +1706,6 @@ public partial class MainViewModel : ObservableObject
         var mediaPath = MediaFilePath;
         var defaultName = Path.GetFileNameWithoutExtension(mediaPath) + "_hardsub" + Path.GetExtension(mediaPath);
 
-        var dialog = new SaveFileDialog
-        {
-            Title = "Export Video (Hard-Sub) - Render subtitles into video",
-            FileName = defaultName,
-            Filter = "Video Files|*.mp4;*.mkv;*.avi;*.mov;*.wmv;*.webm|All Files|*.*"
-        };
-
-            if (dialog.ShowDialog() != true)
-                return;
-
-        var outputPath = dialog.FileName;
-
             string tempAssPath = string.Empty;
             try
             {
@@ -1614,6 +1728,35 @@ public partial class MainViewModel : ObservableObject
                 var assContent = _assParser.Serialize(CurrentDocument);
                 await File.WriteAllTextAsync(tempAssPath, assContent, new UTF8Encoding(true));
 
+                // Options dialog (vertical blur + preview)
+                var optionsDlg = new ExportHardSubOptionsDialog(
+                    mediaPath: mediaPath,
+                    assPath: tempAssPath,
+                    previewTime: ToMediaTime(CurrentPosition));
+                optionsDlg.Owner = Application.Current.MainWindow;
+                if (optionsDlg.ShowDialog() != true)
+                    return;
+
+                var saveDlg = new SaveFileDialog
+                {
+                    Title = "Export Video (Hard-Sub) - Render subtitles into video",
+                    FileName = defaultName,
+                    Filter = "Video Files|*.mp4;*.mkv;*.avi;*.mov;*.wmv;*.webm|All Files|*.*"
+                };
+
+                if (saveDlg.ShowDialog() != true)
+                    return;
+
+                var outputPath = saveDlg.FileName;
+                string? verticalOutputPath = null;
+                if (optionsDlg.ExportVertical)
+                {
+                    var dir = Path.GetDirectoryName(outputPath) ?? string.Empty;
+                    var name = Path.GetFileNameWithoutExtension(outputPath);
+                    var ext = Path.GetExtension(outputPath);
+                    verticalOutputPath = Path.Combine(dir, name + "_vertical" + ext);
+                }
+
                 // Ensure UI updates even if FFmpeg progress messages are delayed.
                 StatusMessage = "Exporting hard-sub video...";
 
@@ -1635,10 +1778,42 @@ public partial class MainViewModel : ObservableObject
                         duration: segDuration,
                         preferGpuEncoding: true,
                         cancellationToken: _exportCts.Token);
+
+                    if (!string.IsNullOrWhiteSpace(verticalOutputPath))
+                    {
+                        FfmpegProgressText = "Exporting vertical hard-sub video";
+                        StatusMessage = "Exporting vertical hard-sub video...";
+                        await _ffmpegService.RenderHardSubVerticalBlurAsync(
+                            mediaPath,
+                            tempAssPath,
+                            verticalOutputPath,
+                            start: startAbs,
+                            duration: segDuration,
+                            width: 1080,
+                            height: 1920,
+                            blurSigma: optionsDlg.BlurSigma,
+                            preferGpuEncoding: true,
+                            cancellationToken: _exportCts.Token);
+                    }
                 }
                 else
                 {
                     await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
+
+                    if (!string.IsNullOrWhiteSpace(verticalOutputPath))
+                    {
+                        FfmpegProgressText = "Exporting vertical hard-sub video";
+                        StatusMessage = "Exporting vertical hard-sub video...";
+                        await _ffmpegService.RenderHardSubVerticalBlurAsync(
+                            mediaPath,
+                            tempAssPath,
+                            verticalOutputPath,
+                            width: 1080,
+                            height: 1920,
+                            blurSigma: optionsDlg.BlurSigma,
+                            preferGpuEncoding: true,
+                            cancellationToken: _exportCts.Token);
+                    }
                 }
 
                 var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
