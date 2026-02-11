@@ -171,6 +171,31 @@ public class FFmpegService : IDisposable
         await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
 
+    public async Task ExportMp3Async(
+        string videoPath,
+        string outputPath,
+        TimeSpan? start = null,
+        TimeSpan? duration = null,
+        int bitrateKbps = 192,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+
+        var ss = start.HasValue && start.Value > TimeSpan.Zero
+            ? $"-ss {ToFfmpegTime(start.Value)} "
+            : string.Empty;
+
+        var tt = duration.HasValue && duration.Value > TimeSpan.Zero
+            ? $"-t {ToFfmpegTime(duration.Value)} "
+            : string.Empty;
+
+        // MP3 export: audio only, VBR off, good compatibility.
+        var arguments = $"-hide_banner -nostdin -loglevel error {ss}{tt}-i \"{videoPath}\" -vn -sn -dn -acodec libmp3lame -b:a {bitrateKbps}k -y \"{outputPath}\"";
+        await RunFFmpegAsync(arguments, videoPath, _cts.Token);
+    }
+
     public async Task ExtractAudioAsync(
         string videoPath,
         string outputPath,
@@ -340,6 +365,35 @@ public class FFmpegService : IDisposable
 
         process.Start();
         await process.WaitForExitAsync(cancellationToken);
+    }
+
+    public async Task CutVideoStreamCopyAsync(
+        string videoPath,
+        string outputPath,
+        TimeSpan start,
+        TimeSpan? end = null,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        if (start < TimeSpan.Zero) start = TimeSpan.Zero;
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+        var startStr = ToFfmpegTime(start);
+
+        string arguments;
+        if (end.HasValue && end.Value > TimeSpan.Zero && end.Value > start)
+        {
+            var dur = end.Value - start;
+            var durStr = ToFfmpegTime(dur);
+            arguments = $"-hide_banner -nostdin -loglevel error -ss {startStr} -t {durStr} -i \"{videoPath}\" -map 0 -c copy -y \"{outputPath}\"";
+        }
+        else
+        {
+            arguments = $"-hide_banner -nostdin -loglevel error -ss {startStr} -i \"{videoPath}\" -map 0 -c copy -y \"{outputPath}\"";
+        }
+
+        await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
 
     private async Task RunFFmpegAsync(string arguments, string inputPath, CancellationToken cancellationToken)

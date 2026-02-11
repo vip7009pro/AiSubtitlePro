@@ -2,6 +2,8 @@ using AiSubtitlePro.Core.Models;
 using AiSubtitlePro.Infrastructure.AI;
 using Microsoft.Win32;
 using System.IO;
+using System.Linq;
+using System.Management;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -43,6 +45,80 @@ public partial class TranscriptionWizard : Window
             FilePathBox.Text = _fixedMediaPath;
             FilePathBox.IsReadOnly = true;
         }
+
+        Loaded += (_, __) =>
+        {
+            PopulateComputeOptions();
+            PopulateGpuList();
+        };
+    }
+
+    private void PopulateComputeOptions()
+    {
+        try
+        {
+            var supported = _whisperEngine.GetSupportedBackends().ToHashSet();
+
+            CpuRadio.IsEnabled = true;
+            CudaRadio.IsEnabled = supported.Contains(WhisperComputeBackend.Cuda);
+            VulkanRadio.IsEnabled = supported.Contains(WhisperComputeBackend.Vulkan);
+
+            // If CPU is not selected but that backend isn't available, force CPU.
+            if (CudaRadio.IsChecked == true && !CudaRadio.IsEnabled)
+                CpuRadio.IsChecked = true;
+            if (VulkanRadio.IsChecked == true && !VulkanRadio.IsEnabled)
+                CpuRadio.IsChecked = true;
+        }
+        catch
+        {
+            // If anything goes wrong, keep CPU as fallback.
+            CpuRadio.IsChecked = true;
+            CudaRadio.IsEnabled = false;
+            VulkanRadio.IsEnabled = false;
+        }
+    }
+
+    private void PopulateGpuList()
+    {
+        try
+        {
+            GpuList.Items.Clear();
+
+            var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
+            foreach (var mo in searcher.Get())
+            {
+                var name = mo["Name"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                    GpuList.Items.Add(name);
+            }
+
+            if (GpuList.Items.Count == 0)
+                GpuList.Items.Add("(No GPU detected)");
+
+            if (GpuList.Items.Count > 0)
+                GpuList.SelectedIndex = 0;
+        }
+        catch
+        {
+            try
+            {
+                GpuList.Items.Clear();
+                GpuList.Items.Add("(GPU list unavailable)");
+                GpuList.SelectedIndex = 0;
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private WhisperComputeBackend GetSelectedBackend()
+    {
+        if (CudaRadio.IsChecked == true && CudaRadio.IsEnabled)
+            return WhisperComputeBackend.Cuda;
+        if (VulkanRadio.IsChecked == true && VulkanRadio.IsEnabled)
+            return WhisperComputeBackend.Vulkan;
+        return WhisperComputeBackend.Cpu;
     }
 
     private void BrowseFile_Click(object sender, RoutedEventArgs e)
@@ -142,6 +218,9 @@ public partial class TranscriptionWizard : Window
                     }
                 }
                 break;
+            case 2: // Compute selection
+                // No strict validation needed; we will fall back to CPU if unsupported.
+                break;
         }
         return true;
     }
@@ -193,6 +272,9 @@ public partial class TranscriptionWizard : Window
             _progressStatus = "Loading model...";
             ProgressText.Text = $"{_progressStatus} (elapsed {FormatElapsed(_transcribeStopwatch.Elapsed)})";
             ProgressBar.IsIndeterminate = true;
+
+            _whisperEngine.Backend = GetSelectedBackend();
+            LogText.Text += $"Compute: {_whisperEngine.Backend}\n";
 
             await _whisperEngine.LoadModelAsync(GetSelectedModel(), _cts.Token);
 

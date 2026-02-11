@@ -2,6 +2,9 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using AiSubtitlePro.Infrastructure.Media;
+using Microsoft.Win32;
+using System.IO;
 
 namespace AiSubtitlePro.Views;
 
@@ -149,6 +152,7 @@ public partial class CutVideoWindow : Window
     }
 
     private readonly TimeSpan _mediaDuration;
+    private readonly string _mediaPath;
 
     public TimeSpan StartAbs { get; private set; }
     public TimeSpan EndAbs { get; private set; }
@@ -157,6 +161,7 @@ public partial class CutVideoWindow : Window
     {
         InitializeComponent();
 
+        _mediaPath = mediaPath;
         _mediaDuration = mediaDuration;
         MediaDurationAbs = mediaDuration;
 
@@ -206,6 +211,130 @@ public partial class CutVideoWindow : Window
         };
 
         UpdateUi();
+    }
+
+    private async void Cut_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_mediaPath) || !File.Exists(_mediaPath))
+        {
+            MessageBox.Show("Media file not found.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var (start, end) = GetEffectiveRange();
+
+        var ext = Path.GetExtension(_mediaPath);
+        if (string.IsNullOrWhiteSpace(ext))
+            ext = ".mp4";
+
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save cut video",
+            Filter = $"Video (*{ext})|*{ext}|All files|*.*",
+            FileName = $"{Path.GetFileNameWithoutExtension(_mediaPath)}.cut{ext}",
+            DefaultExt = ext
+        };
+
+        if (dlg.ShowDialog(this) != true)
+            return;
+
+        var outputPath = dlg.FileName;
+
+        IsEnabled = false;
+        try
+        {
+            using var ffmpeg = new FFmpegService();
+            ffmpeg.ProgressChanged += (_, p) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    SummaryText.Text = $"Cutting... {p.ProgressPercent}%";
+                });
+            };
+
+            await ffmpeg.CutVideoStreamCopyAsync(_mediaPath, outputPath, start, end);
+            SummaryText.Text = "Cut complete.";
+            MessageBox.Show($"Saved: {outputPath}", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Cut failed: {ex.Message}", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+            UpdateUi();
+        }
+    }
+
+    private async void SaveMp3_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_mediaPath) || !File.Exists(_mediaPath))
+        {
+            MessageBox.Show("Media file not found.", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var (start, end) = GetEffectiveRange();
+        var duration = end.HasValue ? (end.Value - start) : (TimeSpan?)null;
+        if (duration.HasValue && duration.Value < TimeSpan.Zero)
+            duration = TimeSpan.Zero;
+
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save MP3",
+            Filter = "MP3 Audio|*.mp3|All files|*.*",
+            FileName = $"{Path.GetFileNameWithoutExtension(_mediaPath)}.cut.mp3",
+            DefaultExt = ".mp3"
+        };
+
+        if (dlg.ShowDialog(this) != true)
+            return;
+
+        var outputPath = dlg.FileName;
+
+        IsEnabled = false;
+        try
+        {
+            using var ffmpeg = new FFmpegService();
+            ffmpeg.ProgressChanged += (_, p) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    SummaryText.Text = $"Saving MP3... {p.ProgressPercent}%";
+                });
+            };
+
+            await ffmpeg.ExportMp3Async(_mediaPath, outputPath, start: start, duration: duration);
+            SummaryText.Text = "MP3 saved.";
+            MessageBox.Show($"Saved: {outputPath}", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"MP3 export failed: {ex.Message}", "Cut Video", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsEnabled = true;
+            UpdateUi();
+        }
+    }
+
+    private (TimeSpan start, TimeSpan? end) GetEffectiveRange()
+    {
+        var start = StartAbs;
+        if (start < TimeSpan.Zero) start = TimeSpan.Zero;
+
+        TimeSpan? end = null;
+        if (EndAbs != TimeSpan.Zero)
+            end = EndAbs;
+        else if (_mediaDuration > TimeSpan.Zero)
+            end = _mediaDuration;
+
+        if (end.HasValue && end.Value < start)
+            end = start;
+
+        return (start, end);
     }
 
     private void OnSliderChanged(object? sender, RoutedPropertyChangedEventArgs<double> e)

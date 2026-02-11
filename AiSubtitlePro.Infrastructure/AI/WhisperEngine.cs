@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using AiSubtitlePro.Core.Models;
 using Whisper.net;
 
@@ -15,6 +16,13 @@ public enum WhisperModelSize
     Small,
     Medium,
     Large
+}
+
+public enum WhisperComputeBackend
+{
+    Cpu,
+    Cuda,
+    Vulkan
 }
 
 /// <summary>
@@ -51,7 +59,62 @@ public class WhisperEngine : IDisposable
     private WhisperModelSize _currentModel;
     private CancellationTokenSource? _cts;
 
+    private WhisperComputeBackend _backend = WhisperComputeBackend.Cpu;
+
     public event EventHandler<TranscriptionProgress>? ProgressChanged;
+
+    public WhisperComputeBackend Backend
+    {
+        get => _backend;
+        set => _backend = value;
+    }
+
+    public IEnumerable<WhisperComputeBackend> GetSupportedBackends()
+    {
+        yield return WhisperComputeBackend.Cpu;
+        if (HasRuntimeLibraryFor(WhisperComputeBackend.Cuda))
+            yield return WhisperComputeBackend.Cuda;
+        if (HasRuntimeLibraryFor(WhisperComputeBackend.Vulkan))
+            yield return WhisperComputeBackend.Vulkan;
+    }
+
+    private static bool HasRuntimeLibraryFor(WhisperComputeBackend backend)
+    {
+        var path = GetBackendLibraryPath(backend);
+        return !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+    }
+
+    private static string? GetBackendLibraryPath(WhisperComputeBackend backend)
+    {
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        return backend switch
+        {
+            WhisperComputeBackend.Cuda => Path.Combine(baseDir, "runtimes", "cuda", "win-x64", "ggml-cuda-whisper.dll"),
+            WhisperComputeBackend.Vulkan => Path.Combine(baseDir, "runtimes", "vulkan", "win-x64", "ggml-vulkan-whisper.dll"),
+            _ => null
+        };
+    }
+
+    private void TryLoadBackendRuntime()
+    {
+        // Whisper.net will try to pick a runtime, but we want deterministic selection.
+        // Loading the backend lib first biases runtime selection.
+        if (_backend == WhisperComputeBackend.Cpu)
+            return;
+
+        var lib = GetBackendLibraryPath(_backend);
+        if (string.IsNullOrWhiteSpace(lib) || !File.Exists(lib))
+            return;
+
+        try
+        {
+            NativeLibrary.Load(lib);
+        }
+        catch
+        {
+            // Ignore; transcription will fall back depending on Whisper.net behavior.
+        }
+    }
 
     /// <summary>
     /// Directory where Whisper models are stored
@@ -168,6 +231,8 @@ public class WhisperEngine : IDisposable
 
                 LogLoadedWhisperDll();
 
+                TryLoadBackendRuntime();
+
                 using var factory = WhisperFactory.FromPath(GetModelPath(_currentModel));
                 var builder = factory.CreateBuilder()
                     .WithLanguage(language == "auto" ? "auto" : language);
@@ -270,6 +335,8 @@ public class WhisperEngine : IDisposable
                 ReportProgress(10, "Loading Whisper model...", TimeSpan.Zero, total);
 
                 LogLoadedWhisperDll();
+
+                TryLoadBackendRuntime();
                 using var factory = WhisperFactory.FromPath(GetModelPath(_currentModel));
                 var builder = factory.CreateBuilder()
                     .WithLanguage(language == "auto" ? "auto" : language);

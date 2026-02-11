@@ -90,8 +90,32 @@
                 </Grid>
             </TabItem>
 
-            <!-- Step 3: Language -->
-            <TabItem Header="3. Language">
+            <!-- Step 3: Compute -->
+            <TabItem Header="3. Compute">
+                <Grid Margin="20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Select Compute Backend" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" />
+
+                    <StackPanel Grid.Row="1">
+                        <RadioButton x:Name="CpuRadio" Content="CPU" IsChecked="True" Margin="0,4" />
+                        <RadioButton x:Name="CudaRadio" Content="GPU (CUDA)" Margin="0,4" />
+                        <RadioButton x:Name="VulkanRadio" Content="GPU (Vulkan)" Margin="0,4" />
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="2" Text="Detected GPUs" Foreground="Gray" Margin="0,16,0,8" />
+
+                    <ListBox Grid.Row="3" x:Name="GpuList" />
+                </Grid>
+            </TabItem>
+
+            <!-- Step 4: Language -->
+            <TabItem Header="4. Language">
                 <Grid Margin="20">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -120,8 +144,8 @@
                 </Grid>
             </TabItem>
 
-            <!-- Step 4: Progress -->
-            <TabItem Header="4. Transcribe">
+            <!-- Step 5: Progress -->
+            <TabItem Header="5. Transcribe">
                 <Grid Margin="20">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
