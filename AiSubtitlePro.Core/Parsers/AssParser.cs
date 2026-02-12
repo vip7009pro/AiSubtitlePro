@@ -3,6 +3,7 @@ using AiSubtitlePro.Core.Models.Enums;
 using System.Drawing;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Globalization;
 
 namespace AiSubtitlePro.Core.Parsers;
 
@@ -17,6 +18,7 @@ public class AssParser : ISubtitleParser
     public IReadOnlyList<string> SupportedExtensions => new[] { ".ass", ".ssa" };
 
     private static readonly Regex TimeRegex = new(@"(\d+):(\d{2}):(\d{2})\.(\d{2})", RegexOptions.Compiled);
+    private static readonly Regex PosRegex = new(@"\\pos\((\d+),(\d+)\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public SubtitleDocument Parse(string content)
     {
@@ -267,7 +269,23 @@ public class AssParser : ISubtitleParser
                 case "marginr": int.TryParse(value, out var mr); subtitle.MarginR = mr; break;
                 case "marginv": int.TryParse(value, out var mv); subtitle.MarginV = mv; break;
                 case "effect": subtitle.Effect = value; break;
-                case "text": subtitle.Text = value; break;
+                case "text":
+                    subtitle.Text = value;
+                    try
+                    {
+                        var m = PosRegex.Match(value);
+                        if (m.Success
+                            && int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var px)
+                            && int.TryParse(m.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var py))
+                        {
+                            subtitle.PosX = px;
+                            subtitle.PosY = py;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                    break;
             }
         }
 
@@ -323,24 +341,55 @@ public class AssParser : ISubtitleParser
 
     private static string SerializeStyle(SubtitleStyle style)
     {
-        return $"Style: {style.Name},{style.FontName},{style.FontSize}," +
-               $"{SubtitleStyle.ColorToAss(style.PrimaryColor)}," +
-               $"{SubtitleStyle.ColorToAss(style.SecondaryColor)}," +
-               $"{SubtitleStyle.ColorToAss(style.OutlineColor)}," +
-               $"{SubtitleStyle.ColorToAss(style.BackColor)}," +
-               $"{(style.Bold ? "-1" : "0")},{(style.Italic ? "-1" : "0")}," +
-               $"{(style.Underline ? "-1" : "0")},{(style.StrikeOut ? "-1" : "0")}," +
-               $"{style.ScaleX},{style.ScaleY},{style.Spacing},{style.Angle}," +
-               $"{style.BorderStyle},{style.Outline},{style.Shadow},{style.Alignment}," +
-               $"{style.MarginL},{style.MarginR},{style.MarginV},{style.Encoding}";
+        var inv = CultureInfo.InvariantCulture;
+
+        // ASS V4+ style line (Aegisub-compatible ordering)
+        return string.Join(',', new[]
+        {
+            "Style: " + style.Name,
+            style.FontName,
+            style.FontSize.ToString(inv),
+            SubtitleStyle.ColorToAss(style.PrimaryColor),
+            SubtitleStyle.ColorToAss(style.SecondaryColor),
+            SubtitleStyle.ColorToAss(style.OutlineColor),
+            SubtitleStyle.ColorToAss(style.BackColor),
+            style.Bold ? "-1" : "0",
+            style.Italic ? "-1" : "0",
+            style.Underline ? "-1" : "0",
+            style.StrikeOut ? "-1" : "0",
+            style.ScaleX.ToString(inv),
+            style.ScaleY.ToString(inv),
+            style.Spacing.ToString(inv),
+            style.Angle.ToString(inv),
+            style.BorderStyle.ToString(inv),
+            style.Outline.ToString(inv),
+            style.Shadow.ToString(inv),
+            style.Alignment.ToString(inv),
+            style.MarginL.ToString(inv),
+            style.MarginR.ToString(inv),
+            style.MarginV.ToString(inv),
+            style.Encoding.ToString(inv)
+        });
     }
 
     private static string SerializeDialogue(SubtitleLine line)
     {
         var prefix = line.Type == DialogueType.Comment ? "Comment" : "Dialogue";
+
+        var text = line.Text ?? string.Empty;
+        text = text
+            .Replace("\r\n", "\\N")
+            .Replace("\n", "\\N")
+            .Replace("\r", "\\N");
+
+        if (line.PosX.HasValue && line.PosY.HasValue && !PosRegex.IsMatch(text))
+        {
+            text = $"{{\\pos({line.PosX.Value},{line.PosY.Value})}}" + text;
+        }
+
         return $"{prefix}: {line.Layer},{FormatTime(line.Start)},{FormatTime(line.End)}," +
                $"{line.StyleName},{line.Actor},{line.MarginL},{line.MarginR},{line.MarginV}," +
-               $"{line.Effect},{line.Text}";
+               $"{line.Effect},{text}";
     }
 
     private static string FormatTime(TimeSpan time)

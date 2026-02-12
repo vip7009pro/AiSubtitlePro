@@ -15,6 +15,7 @@ using System.Threading;
 using AiSubtitlePro.Infrastructure.Media;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using AiSubtitlePro.Services;
 
@@ -41,6 +42,10 @@ public partial class MainViewModel : ObservableObject
     private FfmpegOperation _ffmpegOperation = FfmpegOperation.None;
     private readonly SemaphoreSlim _ffmpegGate = new(1, 1);
     private CancellationTokenSource? _exportCts;
+
+    private bool _syncingPosFromText;
+    private bool _syncingTextFromPos;
+    private static readonly Regex AssPosRegex = new(@"\\pos\((\d+),(\d+)\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private bool _exportHardSubLastVertical;
     private int _exportHardSubLastBlurSigma = 20;
@@ -714,6 +719,84 @@ public partial class MainViewModel : ObservableObject
         RefreshSubtitlePreview();
     }
 
+    private void TrySyncPosFromText(SubtitleLine line)
+    {
+        if (_syncingTextFromPos)
+            return;
+
+        try
+        {
+            _syncingPosFromText = true;
+
+            var text = line.Text ?? string.Empty;
+            var m = AssPosRegex.Match(text);
+            if (!m.Success)
+                return;
+
+            if (!int.TryParse(m.Groups[1].Value, out var px))
+                return;
+            if (!int.TryParse(m.Groups[2].Value, out var py))
+                return;
+
+            // Only update if changed to avoid churn.
+            if (line.PosX != px) line.PosX = px;
+            if (line.PosY != py) line.PosY = py;
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _syncingPosFromText = false;
+        }
+    }
+
+    private void TrySyncTextFromPos(SubtitleLine line)
+    {
+        if (_syncingPosFromText)
+            return;
+
+        if (!line.PosX.HasValue || !line.PosY.HasValue)
+            return;
+
+        try
+        {
+            _syncingTextFromPos = true;
+
+            var text = line.Text ?? string.Empty;
+            var newTag = $"\\pos({line.PosX.Value},{line.PosY.Value})";
+
+            if (AssPosRegex.IsMatch(text))
+            {
+                // Replace first \pos(x,y) in the line
+                text = AssPosRegex.Replace(text, newTag, 1);
+                line.Text = text;
+                return;
+            }
+
+            // No existing \pos - insert into first override block if present, else prepend a new one.
+            var idxOpen = text.IndexOf('{');
+            var idxClose = idxOpen >= 0 ? text.IndexOf('}', idxOpen + 1) : -1;
+            if (idxOpen == 0 && idxClose > 0)
+            {
+                var inner = text.Substring(1, idxClose - 1);
+                var updated = "{" + inner + "\\" + newTag + "}" + text.Substring(idxClose + 1);
+                line.Text = updated;
+            }
+            else
+            {
+                line.Text = "{" + "\\" + newTag + "}" + text;
+            }
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _syncingTextFromPos = false;
+        }
+    }
+
     partial void OnSelectedLineChanged(SubtitleLine? value)
     {
         if (_selectedLineHook != null)
@@ -741,6 +824,18 @@ public partial class MainViewModel : ObservableObject
             || e.PropertyName == nameof(SubtitleLine.Start)
             || e.PropertyName == nameof(SubtitleLine.End))
         {
+            if (sender is SubtitleLine line)
+            {
+                if (e.PropertyName == nameof(SubtitleLine.Text))
+                {
+                    TrySyncPosFromText(line);
+                }
+                else if (e.PropertyName == nameof(SubtitleLine.PosX) || e.PropertyName == nameof(SubtitleLine.PosY))
+                {
+                    TrySyncTextFromPos(line);
+                }
+            }
+
             if (e.PropertyName == nameof(SubtitleLine.StyleName))
             {
                 TryEnsureSelectedLineStyleExists();
