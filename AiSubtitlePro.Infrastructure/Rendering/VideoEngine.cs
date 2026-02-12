@@ -27,6 +27,11 @@ public unsafe class VideoEngine : IDisposable
     private int _renderGeneration;
     private bool _isDisposed;
 
+    private readonly object _frameCacheLock = new();
+    private readonly Dictionary<long, byte[]> _frameCache = new();
+    private readonly LinkedList<long> _frameCacheLru = new();
+    private const int FrameCacheMax = 90;
+
     // Audio-master model: VideoEngine has no internal clock.
     // Rendering is driven by an external master time (audio device clock).
 
@@ -73,6 +78,12 @@ public unsafe class VideoEngine : IDisposable
 
         RecreateBuffers();
         _assRenderer?.SetSize(_width, _height);
+
+        lock (_frameCacheLock)
+        {
+            _frameCache.Clear();
+            _frameCacheLru.Clear();
+        }
 
         // Render first frame for immediate preview
         _decoder.Seek(TimeSpan.Zero);
@@ -160,9 +171,6 @@ public unsafe class VideoEngine : IDisposable
         {
             _assRenderer.SetContent(content);
         }
-
-        // Audio-master model: re-render at current Position immediately (cheap; reuses cached frame).
-        RenderAt(Position);
     }
 
     // Frame selection state (double buffer)
@@ -176,21 +184,91 @@ public unsafe class VideoEngine : IDisposable
         if (position < TimeSpan.Zero) position = TimeSpan.Zero;
         if (Duration > TimeSpan.Zero && position > Duration) position = Duration;
 
-        _decoder.Seek(position);
         Position = position;
 
-        // Flush our selection buffers and decode one frame so RenderAt has something to show.
+        // Try satisfy from cache first (scrubbing back/forth).
+        var cacheKey = ToFrameCacheKey(position);
+        if (TryGetCachedFrame(cacheKey, out var cached))
+        {
+            _ptsPrev = position;
+            _ptsCurr = position;
+            Marshal.Copy(cached, 0, _frameCurr, cached.Length);
+            Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+            RenderAt(position);
+            return;
+        }
+
+        // Seek to nearest keyframe and decode forward to requested time (Aegisub/FFMS2-like).
         _ptsPrev = TimeSpan.Zero;
         _ptsCurr = TimeSpan.Zero;
-        if (DecodeNextIntoCurrent(out var firstPts))
+        if (_decoder.SeekAndDecodeTo(position, out var pts))
         {
-            _ptsCurr = firstPts;
+            _ptsCurr = pts;
             Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
             _ptsPrev = _ptsCurr;
             Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
+
+            TryCacheCurrentFrame(cacheKey);
+        }
+        else
+        {
+            _decoder.Seek(position);
         }
 
         RenderAt(position);
+    }
+
+    private long ToFrameCacheKey(TimeSpan t)
+    {
+        // Quantize by ~30fps for cache reuse.
+        return (long)Math.Round(t.TotalMilliseconds / 33.0);
+    }
+
+    private bool TryGetCachedFrame(long key, out byte[] data)
+    {
+        lock (_frameCacheLock)
+        {
+            if (_frameCache.TryGetValue(key, out data!))
+            {
+                _frameCacheLru.Remove(key);
+                _frameCacheLru.AddLast(key);
+                return true;
+            }
+        }
+
+        data = Array.Empty<byte>();
+        return false;
+    }
+
+    private void TryCacheCurrentFrame(long key)
+    {
+        try
+        {
+            var bytes = new byte[_stride * _height];
+            Marshal.Copy(_frameCurr, bytes, 0, bytes.Length);
+
+            lock (_frameCacheLock)
+            {
+                if (_frameCache.ContainsKey(key))
+                {
+                    _frameCacheLru.Remove(key);
+                    _frameCacheLru.AddLast(key);
+                    return;
+                }
+
+                _frameCache[key] = bytes;
+                _frameCacheLru.AddLast(key);
+                while (_frameCacheLru.Count > FrameCacheMax)
+                {
+                    var oldest = _frameCacheLru.First!.Value;
+                    _frameCacheLru.RemoveFirst();
+                    _frameCache.Remove(oldest);
+                }
+            }
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>

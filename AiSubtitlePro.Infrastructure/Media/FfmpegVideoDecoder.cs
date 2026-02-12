@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using FFmpeg.AutoGen;
 
 namespace AiSubtitlePro.Infrastructure.Media;
@@ -25,6 +27,9 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
     private int _bgraBufferSize;
 
     private bool _isOpen;
+
+    private long[] _keyframeIndexTs = Array.Empty<long>();
+    private string? _sourcePath;
 
     public int Width { get; private set; }
     public int Height { get; private set; }
@@ -127,6 +132,8 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
             ThrowIfError(ffmpeg.avformat_open_input(&fmt, path, null, null));
             _formatCtx = fmt;
 
+            _sourcePath = path;
+
             ThrowIfError(ffmpeg.avformat_find_stream_info(_formatCtx, null));
 
             _videoStreamIndex = ffmpeg.av_find_best_stream(_formatCtx, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, null, 0);
@@ -135,6 +142,10 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
 
             _videoStream = _formatCtx->streams[_videoStreamIndex];
             TimeBase = _videoStream->time_base;
+
+            // Build keyframe timestamps by scanning packets in a separate format context.
+            // This is slower than container indexes but works with FFmpeg.AutoGen bindings.
+            _keyframeIndexTs = LoadOrBuildKeyframeIndex(path);
 
             var codecpar = _videoStream->codecpar;
             var codec = ffmpeg.avcodec_find_decoder(codecpar->codec_id);
@@ -213,6 +224,167 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
         }
     }
 
+    private static long[] LoadOrBuildKeyframeIndex(string path)
+    {
+        var cacheKey = TryComputeIndexCacheKey(path);
+        if (!string.IsNullOrWhiteSpace(cacheKey))
+        {
+            var cachePath = GetIndexCachePath(cacheKey);
+            var loaded = TryLoadIndex(cachePath);
+            if (loaded != null)
+                return loaded;
+
+            var built = BuildKeyframeIndexByPacketScan(path);
+            TrySaveIndex(cachePath, built);
+            return built;
+        }
+
+        return BuildKeyframeIndexByPacketScan(path);
+    }
+
+    private static string GetIndexCachePath(string cacheKey)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
+        Directory.CreateDirectory(tempDir);
+        return Path.Combine(tempDir, $"keyframes_{cacheKey}.bin");
+    }
+
+    private static string? TryComputeIndexCacheKey(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists) return null;
+
+            var payload = $"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+            var bytes = Encoding.UTF8.GetBytes(payload);
+            var hash = SHA1.HashData(bytes);
+            return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static long[]? TryLoadIndex(string cachePath)
+    {
+        try
+        {
+            if (!File.Exists(cachePath))
+                return null;
+
+            using var fs = new FileStream(cachePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var br = new BinaryReader(fs);
+            var count = br.ReadInt32();
+            if (count <= 0 || count > 5_000_000)
+                return null;
+
+            var arr = new long[count];
+            for (var i = 0; i < count; i++)
+                arr[i] = br.ReadInt64();
+            return arr;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TrySaveIndex(string cachePath, long[] index)
+    {
+        try
+        {
+            if (index == null || index.Length == 0)
+                return;
+
+            using var fs = new FileStream(cachePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            using var bw = new BinaryWriter(fs);
+            bw.Write(index.Length);
+            for (var i = 0; i < index.Length; i++)
+                bw.Write(index[i]);
+        }
+        catch
+        {
+        }
+    }
+
+    private static long[] BuildKeyframeIndexByPacketScan(string path)
+    {
+        try
+        {
+            AVFormatContext* fmt = null;
+            if (ffmpeg.avformat_open_input(&fmt, path, null, null) < 0 || fmt == null)
+                return Array.Empty<long>();
+
+            try
+            {
+                if (ffmpeg.avformat_find_stream_info(fmt, null) < 0)
+                    return Array.Empty<long>();
+
+                var videoStreamIndex = ffmpeg.av_find_best_stream(fmt, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, -1, null, 0);
+                if (videoStreamIndex < 0)
+                    return Array.Empty<long>();
+
+                var packet = ffmpeg.av_packet_alloc();
+                if (packet == null)
+                    return Array.Empty<long>();
+
+                try
+                {
+                    var set = new System.Collections.Generic.HashSet<long>();
+                    while (true)
+                    {
+                        var read = ffmpeg.av_read_frame(fmt, packet);
+                        if (read < 0)
+                            break;
+
+                        try
+                        {
+                            if (packet->stream_index != videoStreamIndex)
+                                continue;
+
+                            // packet flags: AV_PKT_FLAG_KEY indicates keyframe.
+                            if ((packet->flags & ffmpeg.AV_PKT_FLAG_KEY) == 0)
+                                continue;
+
+                            long ts = packet->pts != ffmpeg.AV_NOPTS_VALUE ? packet->pts : packet->dts;
+                            if (ts == ffmpeg.AV_NOPTS_VALUE)
+                                continue;
+
+                            set.Add(ts);
+                        }
+                        finally
+                        {
+                            ffmpeg.av_packet_unref(packet);
+                        }
+                    }
+
+                    if (set.Count == 0)
+                        return Array.Empty<long>();
+
+                    var arr = set.ToArray();
+                    Array.Sort(arr);
+                    return arr;
+                }
+                finally
+                {
+                    var p = packet;
+                    ffmpeg.av_packet_free(&p);
+                }
+            }
+            finally
+            {
+                var f = fmt;
+                ffmpeg.avformat_close_input(&f);
+            }
+        }
+        catch
+        {
+            return Array.Empty<long>();
+        }
+    }
+
     public void Seek(TimeSpan position)
     {
         lock (_sync)
@@ -222,13 +394,53 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
 
             if (position < TimeSpan.Zero) position = TimeSpan.Zero;
 
-            long ts = ffmpeg.av_rescale_q(
-                (long)(position.TotalMilliseconds),
-                new AVRational { num = 1, den = 1000 },
-                TimeBase);
+            // Use seconds-based conversion to preserve precision (avoid rounding to milliseconds).
+            var tb = TimeBase.num / (double)TimeBase.den;
+            if (tb <= 0) tb = 1.0 / 1000.0;
+            long ts = (long)Math.Round(position.TotalSeconds / tb);
 
             ThrowIfError(ffmpeg.av_seek_frame(_formatCtx, _videoStreamIndex, ts, ffmpeg.AVSEEK_FLAG_BACKWARD));
             ffmpeg.avcodec_flush_buffers(_codecCtx);
+        }
+    }
+
+    public bool SeekAndDecodeTo(TimeSpan target, out TimeSpan decodedPts)
+    {
+        decodedPts = TimeSpan.Zero;
+        lock (_sync)
+        {
+            if (!_isOpen)
+                return false;
+
+            if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+
+            var tb = TimeBase.num / (double)TimeBase.den;
+            if (tb <= 0) tb = 1.0 / 1000.0;
+            var targetTs = (long)Math.Round(target.TotalSeconds / tb);
+
+            // Pick nearest keyframe <= target when index is available.
+            long seekTs = targetTs;
+            if (_keyframeIndexTs.Length > 0)
+            {
+                var idx = Array.BinarySearch(_keyframeIndexTs, targetTs);
+                if (idx < 0) idx = ~idx - 1;
+                if (idx < 0) idx = 0;
+                seekTs = _keyframeIndexTs[idx];
+            }
+
+            ThrowIfError(ffmpeg.av_seek_frame(_formatCtx, _videoStreamIndex, seekTs, ffmpeg.AVSEEK_FLAG_BACKWARD));
+            ffmpeg.avcodec_flush_buffers(_codecCtx);
+
+            // Decode forward until we reach a frame at/after target.
+            while (true)
+            {
+                if (!TryDecodeNextFrame_NoLock(out var pts))
+                    return false;
+
+                decodedPts = pts;
+                if (pts >= target)
+                    return true;
+            }
         }
     }
 
@@ -240,55 +452,62 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
             if (!_isOpen)
                 return false;
 
-            while (true)
+            return TryDecodeNextFrame_NoLock(out pts);
+        }
+    }
+
+    private bool TryDecodeNextFrame_NoLock(out TimeSpan pts)
+    {
+        pts = TimeSpan.Zero;
+
+        while (true)
+        {
+            int read = ffmpeg.av_read_frame(_formatCtx, _packet);
+            if (read < 0)
             {
-                int read = ffmpeg.av_read_frame(_formatCtx, _packet);
-                if (read < 0)
+                if (read == ffmpeg.AVERROR_EOF)
+                    return false;
+
+                throw new InvalidOperationException($"FFmpeg error: av_read_frame failed: {GetErrorString(read)} ({read})");
+            }
+
+            try
+            {
+                if (_packet->stream_index != _videoStreamIndex)
+                    continue;
+
+                ThrowIfError(ffmpeg.avcodec_send_packet(_codecCtx, _packet));
+
+                while (true)
                 {
-                    if (read == ffmpeg.AVERROR_EOF)
-                        return false;
+                    int recv = ffmpeg.avcodec_receive_frame(_codecCtx, _decodedFrame);
+                    if (recv == ffmpeg.AVERROR(ffmpeg.EAGAIN) || recv == ffmpeg.AVERROR_EOF)
+                        break;
 
-                    throw new InvalidOperationException($"FFmpeg error: av_read_frame failed: {GetErrorString(read)} ({read})");
-                }
+                    ThrowIfError(recv);
 
-                try
-                {
-                    if (_packet->stream_index != _videoStreamIndex)
-                        continue;
+                    // Convert to BGRA
+                    ffmpeg.sws_scale(
+                        _sws,
+                        _decodedFrame->data,
+                        _decodedFrame->linesize,
+                        0,
+                        Height,
+                        _bgraFrame->data,
+                        _bgraFrame->linesize);
 
-                    ThrowIfError(ffmpeg.avcodec_send_packet(_codecCtx, _packet));
-
-                    while (true)
+                    long bestTs = _decodedFrame->best_effort_timestamp;
+                    if (bestTs != ffmpeg.AV_NOPTS_VALUE)
                     {
-                        int recv = ffmpeg.avcodec_receive_frame(_codecCtx, _decodedFrame);
-                        if (recv == ffmpeg.AVERROR(ffmpeg.EAGAIN) || recv == ffmpeg.AVERROR_EOF)
-                            break;
-
-                        ThrowIfError(recv);
-
-                        // Convert to BGRA
-                        ffmpeg.sws_scale(
-                            _sws,
-                            _decodedFrame->data,
-                            _decodedFrame->linesize,
-                            0,
-                            Height,
-                            _bgraFrame->data,
-                            _bgraFrame->linesize);
-
-                        long bestTs = _decodedFrame->best_effort_timestamp;
-                        if (bestTs != ffmpeg.AV_NOPTS_VALUE)
-                        {
-                            pts = TimeSpan.FromSeconds(bestTs * (TimeBase.num / (double)TimeBase.den));
-                        }
-
-                        return true;
+                        pts = TimeSpan.FromSeconds(bestTs * (TimeBase.num / (double)TimeBase.den));
                     }
+
+                    return true;
                 }
-                finally
-                {
-                    ffmpeg.av_packet_unref(_packet);
-                }
+            }
+            finally
+            {
+                ffmpeg.av_packet_unref(_packet);
             }
         }
     }
@@ -306,6 +525,8 @@ public unsafe sealed class FfmpegVideoDecoder : IDisposable
     private void CloseInternal()
     {
         _isOpen = false;
+        _keyframeIndexTs = Array.Empty<long>();
+        _sourcePath = null;
 
         if (_packet != null)
         {

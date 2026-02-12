@@ -47,6 +47,13 @@ public partial class MainViewModel : ObservableObject
     private bool _syncingTextFromPos;
     private static readonly Regex AssPosRegex = new(@"\\pos\((\d+),(\d+)\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private readonly Stopwatch _subtitlePerfStopwatch = Stopwatch.StartNew();
+    private long _lastSubtitleOverlayUpdateTick;
+    private SubtitleDocument? _subtitleCacheDoc;
+    private bool _subtitleCacheDirty = true;
+    private List<SubtitleLine> _linesByStart = new();
+    private List<SubtitleLine> _lastActiveLines = new();
+
     private bool _exportHardSubLastVertical;
     private int _exportHardSubLastBlurSigma = 20;
     private bool _exportHardSubLastEnableTrailer;
@@ -224,6 +231,90 @@ public partial class MainViewModel : ObservableObject
 
         CanUndo = _undo.CanUndo;
         CanRedo = _undo.CanRedo;
+    }
+
+    partial void OnCurrentDocumentChanged(SubtitleDocument? value)
+    {
+        try
+        {
+            if (_subtitleCacheDoc != null)
+                _subtitleCacheDoc.Lines.CollectionChanged -= SubtitleLines_CollectionChanged;
+        }
+        catch
+        {
+        }
+
+        _subtitleCacheDoc = value;
+        _subtitleCacheDirty = true;
+        _lastActiveLines = new List<SubtitleLine>();
+
+        try
+        {
+            if (_subtitleCacheDoc != null)
+                _subtitleCacheDoc.Lines.CollectionChanged += SubtitleLines_CollectionChanged;
+        }
+        catch
+        {
+        }
+    }
+
+    private void SubtitleLines_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        _subtitleCacheDirty = true;
+    }
+
+    private void EnsureSubtitleTimingCache()
+    {
+        var doc = CurrentDocument;
+        if (doc == null) return;
+
+        if (!_subtitleCacheDirty && ReferenceEquals(_subtitleCacheDoc, doc) && _linesByStart.Count == doc.Lines.Count)
+            return;
+
+        _subtitleCacheDoc = doc;
+        _linesByStart = doc.Lines
+            .OrderBy(l => l.Start)
+            .ThenBy(l => l.End)
+            .ToList();
+        _subtitleCacheDirty = false;
+    }
+
+    private static int UpperBoundStart(List<SubtitleLine> lines, TimeSpan t)
+    {
+        var lo = 0;
+        var hi = lines.Count;
+        while (lo < hi)
+        {
+            var mid = lo + ((hi - lo) / 2);
+            if (lines[mid].Start <= t) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    private List<SubtitleLine> ComputeActiveLines(TimeSpan value)
+    {
+        EnsureSubtitleTimingCache();
+        if (_linesByStart.Count == 0) return new List<SubtitleLine>();
+
+        var idx = UpperBoundStart(_linesByStart, value);
+        var active = new List<SubtitleLine>();
+
+        // Start inclusive, End exclusive (Aegisub-style), scan backward for overlaps.
+        for (var i = idx - 1; i >= 0; i--)
+        {
+            var l = _linesByStart[i];
+            if (l.End <= value)
+                break;
+            if (value >= l.Start && value < l.End)
+                active.Add(l);
+        }
+
+        if (active.Count <= 1)
+            return active;
+
+        // Stable order
+        return active.OrderBy(l => l.Start).ThenBy(l => l.Layer).ToList();
     }
 
     [RelayCommand(CanExecute = nameof(CanUndo))]
@@ -480,28 +571,98 @@ public partial class MainViewModel : ObservableObject
     {
         if (CurrentDocument != null)
         {
-            // Stable overlap rule (Aegisub-style): Start inclusive, End exclusive.
-            // This avoids flickering/alternating visibility when scrubbing on boundaries.
-            var activeLines = CurrentDocument.Lines
-                .Where(l =>
+            // Throttle overlay updates while scrubbing/playing.
+            // We only push new ASS to the renderer when the active set changes.
+            var nowTick = _subtitlePerfStopwatch.ElapsedTicks;
+            var minTicks = Stopwatch.Frequency / 60; // cap overlay rebuild to ~60hz
+            if (nowTick - _lastSubtitleOverlayUpdateTick < minTicks)
+                return;
+
+            var activeLines = ComputeActiveLines(value);
+
+            var changed = _lastActiveLines.Count != activeLines.Count;
+            if (!changed)
+            {
+                for (var i = 0; i < _lastActiveLines.Count; i++)
                 {
-                    if (l.End <= l.Start)
+                    if (!ReferenceEquals(_lastActiveLines[i], activeLines[i]))
                     {
-                        // Degenerate/invalid line: treat as a point event with a tiny tolerance.
-                        var tol = TimeSpan.FromMilliseconds(1);
-                        return value >= (l.Start - tol) && value <= (l.End + tol);
+                        changed = true;
+                        break;
                     }
+                }
+            }
 
-                    return value >= l.Start && value < l.End;
-                })
-                .ToList();
+            if (!changed)
+                return;
 
-            ActiveSubtitleText = activeLines.Count > 0 
-                ? string.Join("\n", activeLines.Select(l => l.Text)) 
+            _lastSubtitleOverlayUpdateTick = nowTick;
+            _lastActiveLines = activeLines;
+
+            ActiveSubtitleText = activeLines.Count > 0
+                ? string.Join("\n", activeLines.Select(l => l.Text))
                 : string.Empty;
 
             ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
         }
+    }
+
+    [RelayCommand]
+    private void InsertLineBeforeAtCurrentTime()
+    {
+        InsertLineRelativeToSelection(insertAfter: false);
+    }
+
+    [RelayCommand]
+    private void InsertLineAfterAtCurrentTime()
+    {
+        InsertLineRelativeToSelection(insertAfter: true);
+    }
+
+    private void InsertLineRelativeToSelection(bool insertAfter)
+    {
+        if (CurrentDocument == null) return;
+
+        var doc = CurrentDocument;
+        var anchor = SelectedLine;
+        var baseIndex = anchor != null ? doc.Lines.IndexOf(anchor) : doc.Lines.Count;
+        if (baseIndex < 0) baseIndex = doc.Lines.Count;
+
+        var insertIndex = insertAfter ? Math.Min(baseIndex + 1, doc.Lines.Count) : Math.Min(baseIndex, doc.Lines.Count);
+
+        var start = ClampTimelineTime(CurrentPosition);
+        var end = ClampTimelineTime(start + TimeSpan.FromSeconds(3));
+        if (end < start) end = start;
+
+        var newLine = new SubtitleLine
+        {
+            Start = start,
+            End = end,
+            Text = string.Empty,
+            StyleName = anchor?.StyleName ?? "Default"
+        };
+
+        _undo.Execute(new DelegateCommand(
+            insertAfter ? "Insert Line After" : "Insert Line Before",
+            execute: () =>
+            {
+                doc.Lines.Insert(insertIndex, newLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            },
+            undo: () =>
+            {
+                doc.Lines.Remove(newLine);
+                doc.ReindexLines();
+                doc.IsDirty = true;
+            }));
+
+        RefreshDisplayedLines();
+        SelectedLine = newLine;
+        StatusMessage = insertAfter ? "Inserted line after" : "Inserted line before";
+
+        _subtitleCacheDirty = true;
+        RefreshSubtitlePreview();
     }
 
     private static string? TryComputeWaveformCacheKey(string mediaPath)

@@ -316,7 +316,7 @@
                                               SelectedValue="{Binding SelectedLine.StyleName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                               IsEditable="True"
                                               ToolTip="Style Name"
-                                              Background="White" Foreground="#111111" />
+                                              Background="White" Foreground="#111111" Height="24" FontSize="12" />
                                     <CheckBox DockPanel.Dock="Left" Content="Override" Margin="0,0,8,0"
                                               IsChecked="{Binding SelectedLine.UseStyleOverride, Mode=TwoWay}" />
                                     <Button DockPanel.Dock="Left" ToolTip="Add Style" Command="{Binding AddStyleCommand}"
@@ -460,6 +460,12 @@
                              SelectionUnit="FullRow"
                              PreviewKeyDown="SubtitleGrid_PreviewKeyDown"
                              SelectionChanged="SubtitleGrid_SelectionChanged">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Insert line before (Ctrl+D)" Command="{Binding InsertLineBeforeAtCurrentTimeCommand}" />
+                                <MenuItem Header="Insert line after (Ctrl+Shift+D)" Command="{Binding InsertLineAfterAtCurrentTimeCommand}" />
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40" IsReadOnly="True" />
                             <DataGridTextColumn Header="Start" Binding="{Binding Start, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" />

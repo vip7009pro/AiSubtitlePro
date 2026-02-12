@@ -240,6 +240,20 @@ public partial class MainWindow : Window
         var vm = ViewModel;
         if (vm == null) return;
 
+        // Subtitle insert shortcuts must work even when focus is inside the editor TextBox.
+        if (e.Key == System.Windows.Input.Key.D
+            && (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0)
+        {
+            var withShift = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
+            var cmd = withShift ? vm.InsertLineAfterAtCurrentTimeCommand : vm.InsertLineBeforeAtCurrentTimeCommand;
+            if (cmd != null && cmd.CanExecute(null))
+            {
+                cmd.Execute(null);
+                e.Handled = true;
+                return;
+            }
+        }
+
         // Frame-step seek with Left/Right arrows (when not typing in a text input).
         if (e.Key == System.Windows.Input.Key.Left || e.Key == System.Windows.Input.Key.Right)
         {

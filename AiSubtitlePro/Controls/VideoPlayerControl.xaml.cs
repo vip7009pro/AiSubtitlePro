@@ -21,6 +21,12 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private bool _isDragging;
     private bool _isDisposed;
 
+    private DispatcherTimer? _scrubTimer;
+    private TimeSpan _pendingScrubTime;
+    private bool _hasPendingScrub;
+    private readonly SemaphoreSlim _scrubSeekGate = new(1, 1);
+    private int _scrubSeq;
+
     private readonly Stopwatch _renderStopwatch = Stopwatch.StartNew();
     private long _lastRenderTick;
     private TimeSpan _lastRenderedTime = TimeSpan.MinValue;
@@ -135,6 +141,12 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     {
         InitializeComponent();
         InitializeEngine();
+
+        _scrubTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(33) // ~30fps during scrubbing
+        };
+        _scrubTimer.Tick += (_, __) => ApplyPendingScrubSeek();
 
         // Ensure one-tap click-to-seek works even if Slider template handles the mouse event.
         TimelineSlider.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,
@@ -682,11 +694,15 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void TimelineSlider_DragStarted(object sender, DragStartedEventArgs e)
     {
         _isDragging = true;
+        _hasPendingScrub = false;
+        _scrubTimer?.Start();
     }
 
     private void TimelineSlider_DragCompleted(object sender, DragCompletedEventArgs e)
     {
         _isDragging = false;
+        _scrubTimer?.Stop();
+        _hasPendingScrub = false;
         var t = TimeSpan.FromMilliseconds(TimelineSlider.Value);
         SeekTo(t);
         Position = t;
@@ -697,6 +713,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     private void TimelineSlider_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         _isDragging = false;
+        _scrubTimer?.Stop();
+        _hasPendingScrub = false;
         // No-op if this was a simple click-to-seek (already applied in mouse down).
         // If user was dragging the thumb, DragCompleted will seek once.
     }
@@ -708,8 +726,70 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             var newTime = TimeSpan.FromMilliseconds(e.NewValue);
             Position = newTime;
             UpdateTimeDisplay();
-            // Apply seek immediately on drag for instant subtitle update; frame drops are acceptable.
-            SeekTo(newTime);
+
+            // Debounce seeks while dragging to avoid decoder backlog.
+            _pendingScrubTime = newTime;
+            _hasPendingScrub = true;
+        }
+    }
+
+    private void ApplyPendingScrubSeek()
+    {
+        if (_isDisposed) return;
+        if (!_isDragging) return;
+        if (!_hasPendingScrub) return;
+
+        _hasPendingScrub = false;
+
+        // Coalesce: only the latest scrub request should be processed.
+        var seq = Interlocked.Increment(ref _scrubSeq);
+        ApplyScrubSeek(seq, _pendingScrubTime);
+    }
+
+    private void ApplyScrubSeek(int seq, TimeSpan position)
+    {
+        if (_isDisposed) return;
+        var engine = _videoEngine;
+        if (engine == null) return;
+
+        // Do not overlap decoder seeks; if one is in progress, skip this tick.
+        if (!_scrubSeekGate.Wait(0))
+            return;
+
+        try
+        {
+            if (_isDisposed) return;
+            if (!_isDragging) return;
+            if (seq != Volatile.Read(ref _scrubSeq)) return;
+
+            // Video-only seek while scrubbing (do not seek audio clock on every tick).
+            var (start, end) = GetEffectiveTrim();
+            if (position < start) position = start;
+            if (end > TimeSpan.Zero && position > end) position = end;
+
+            engine.SeekTo(position);
+            engine.RenderAt(position);
+
+            // Notify listeners (MainWindow updates VM.CurrentPosition from this event).
+            if (_isDisposed) return;
+            if (!_isDragging) return;
+            if (seq != Volatile.Read(ref _scrubSeq)) return;
+
+            Position = position;
+            Duration = engine.Duration;
+            IsPlaying = _audioClock?.IsPlaying == true;
+            UpdateTimeDisplay();
+            PositionChanged?.Invoke(this, position);
+
+            _lastRenderedTime = position;
+            _renderOnceRequested = false;
+        }
+        catch
+        {
+        }
+        finally
+        {
+            try { _scrubSeekGate.Release(); } catch { }
         }
     }
 
@@ -737,6 +817,18 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
+
+        try
+        {
+            if (_scrubTimer != null)
+            {
+                _scrubTimer.Stop();
+                _scrubTimer = null;
+            }
+        }
+        catch
+        {
+        }
 
         DetachRenderLoop();
         CloseAudioClock();
