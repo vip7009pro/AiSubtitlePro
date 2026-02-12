@@ -238,7 +238,10 @@ public partial class MainWindow : Window
     private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         var vm = ViewModel;
-        if (vm == null) return;
+        if (vm?.SelectedLine == null || vm.CurrentDocument == null) return;
+
+        var focusIsTextBox = System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.TextBox
+            || System.Windows.Input.Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase;
 
         // Subtitle insert shortcuts must work even when focus is inside the editor TextBox.
         if (e.Key == System.Windows.Input.Key.D
@@ -273,6 +276,19 @@ public partial class MainWindow : Window
 
         if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0)
             return;
+
+        // Prevent timing hotkeys from editing Start/End while the user is typing subtitle text.
+        if (focusIsTextBox)
+        {
+            if (e.Key == System.Windows.Input.Key.D1
+                || e.Key == System.Windows.Input.Key.D2
+                || e.Key == System.Windows.Input.Key.D3
+                || e.Key == System.Windows.Input.Key.D4
+                || e.Key == System.Windows.Input.Key.P)
+            {
+                return;
+            }
+        }
 
         if (e.Key == System.Windows.Input.Key.P)
         {
@@ -335,6 +351,23 @@ public partial class MainWindow : Window
 
         vm.SetSelectedLinePosition(e.X, e.Y);
         vm.StatusMessage = $"Subtitle position set (double-click): ({e.X}, {e.Y})";
+
+        try
+        {
+            vm.RefreshSubtitlePreview();
+
+            var abs = vm.ToMediaTime(vm.SelectedLine.Start);
+
+            // Let binding propagate CurrentSubtitle -> VideoPlayerControl before seeking.
+            // SeekTo already renders and updates Position/slider; avoid double-render drift.
+            Dispatcher.InvokeAsync(() =>
+            {
+                try { VideoPlayer.SeekTo(abs); } catch { }
+            }, System.Windows.Threading.DispatcherPriority.DataBind);
+        }
+        catch
+        {
+        }
     }
 
     private void PickPrimaryColor_Click(object sender, RoutedEventArgs e)
@@ -413,6 +446,9 @@ public partial class MainWindow : Window
 
             ViewModel.MediaDurationAbs = VideoPlayer.Duration;
             ViewModel.MediaDuration = ViewModel.GetTimelineDuration(ViewModel.MediaDurationAbs);
+
+            // Publish initial subtitle overlay immediately.
+            ViewModel.RefreshSubtitlePreview();
         }
     }
 

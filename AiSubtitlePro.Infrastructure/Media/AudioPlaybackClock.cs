@@ -91,6 +91,27 @@ public sealed class AudioPlaybackClock : IDisposable
             if (!_isPlaying)
                 return;
 
+            // Rebase clock to the exact paused position so a subsequent Play() resumes from here.
+            try
+            {
+                if (_out != null && _format != null)
+                {
+                    var bytes = _out.GetPosition();
+                    var deltaBytes = Math.Max(0, bytes - _deviceStartBytes);
+                    var deltaSeconds = deltaBytes / (double)_format.AverageBytesPerSecond;
+                    var t = _clockStartTime + TimeSpan.FromSeconds(deltaSeconds);
+
+                    if (Duration > TimeSpan.Zero && t > Duration) t = Duration;
+                    if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+
+                    _clockStartTime = t;
+                    _deviceStartBytes = bytes;
+                }
+            }
+            catch
+            {
+            }
+
             _isPlaying = false;
             try { _out?.Pause(); } catch { }
             _cts?.Cancel();

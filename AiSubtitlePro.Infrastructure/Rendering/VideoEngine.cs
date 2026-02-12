@@ -15,7 +15,21 @@ public unsafe class VideoEngine : IDisposable
     private readonly AssRenderer? _assRenderer;
     private readonly FfmpegVideoDecoder _decoder;
 
+    private readonly D3DImageRenderer? _d3dImageRenderer;
+    private bool _useGpu;
+
     private readonly object _renderLock = new();
+
+    private readonly SemaphoreSlim _decodeGate = new(1, 1);
+    private int _decodeSeq;
+    private volatile int _decodeSeqRequested;
+    private long _decodeTargetTicks;
+
+    private static readonly TimeSpan PlaybackDecodeAhead = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan PlaybackDecodeLowWater = TimeSpan.FromMilliseconds(80);
+
+    private CancellationTokenSource? _playDecodeCts;
+    private Task? _playDecodeTask;
 
     private WriteableBitmap? _writeableBitmap;
     private IntPtr _videoFrameBuffer;
@@ -25,7 +39,18 @@ public unsafe class VideoEngine : IDisposable
     private int _stride;
 
     private int _renderGeneration;
+
+    private int _uiUploadQueued;
+    private IntPtr _uiUploadBuffer;
+    private int _uiUploadWidth;
+    private int _uiUploadHeight;
+    private int _uiUploadStride;
+    private int _uiUploadGen;
+    private bool _uiUploadUseGpu;
     private bool _isDisposed;
+
+    private bool _endOfStream;
+    private int _mediaEndedRaised;
 
     private readonly object _frameCacheLock = new();
     private readonly Dictionary<long, byte[]> _frameCache = new();
@@ -38,7 +63,7 @@ public unsafe class VideoEngine : IDisposable
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? MediaEnded;
 
-    public ImageSource? VideoSource => _writeableBitmap;
+    public ImageSource? VideoSource => _useGpu ? _d3dImageRenderer?.ImageSource : _writeableBitmap;
 
     public int VideoWidth => _width;
     public int VideoHeight => _height;
@@ -64,10 +89,28 @@ public unsafe class VideoEngine : IDisposable
             _assRenderer = null;
         }
         _decoder = new FfmpegVideoDecoder();
+
+        try
+        {
+            _d3dImageRenderer = new D3DImageRenderer();
+            _useGpu = true;
+        }
+        catch
+        {
+            _d3dImageRenderer = null;
+            _useGpu = false;
+        }
     }
 
     public void LoadMedia(string path)
     {
+        // Prevent background decode from touching decoder while we reinitialize.
+        _decodeGate.Wait();
+        try
+        {
+        _endOfStream = false;
+        _mediaEndedRaised = 0;
+
         _decoder.Open(path);
 
         _width = _decoder.Width;
@@ -78,6 +121,18 @@ public unsafe class VideoEngine : IDisposable
 
         RecreateBuffers();
         _assRenderer?.SetSize(_width, _height);
+
+        if (_useGpu && _d3dImageRenderer != null)
+        {
+            try
+            {
+                _uiDispatcher?.Invoke(() => _d3dImageRenderer.Initialize(_width, _height));
+            }
+            catch
+            {
+                _useGpu = false;
+            }
+        }
 
         lock (_frameCacheLock)
         {
@@ -101,21 +156,143 @@ public unsafe class VideoEngine : IDisposable
         Buffer.MemoryCopy((void*)_frameCurr, (void*)_framePrev, (long)(_stride * _height), (long)(_stride * _height));
 
         RenderAtSync(TimeSpan.Zero);
+        }
+        finally
+        {
+            _decodeGate.Release();
+        }
     }
 
-    public void RenderAtSync(TimeSpan masterTime)
+    public void StartPlaybackDecodeLoop(Func<TimeSpan> getMasterTime)
     {
-        if (_writeableBitmap == null) return;
-        if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+        if (_isDisposed) return;
+        if (_playDecodeTask != null) return;
+
+        _playDecodeCts = new CancellationTokenSource();
+        var token = _playDecodeCts.Token;
+
+        _playDecodeTask = Task.Run(() =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    if (_endOfStream)
+                    {
+                        Thread.Sleep(10);
+                        continue;
+                    }
+
+                    if (!_decodeGate.Wait(0))
+                    {
+                        Thread.Sleep(1);
+                        continue;
+                    }
+
+                    try
+                    {
+                        var master = getMasterTime();
+                        if (master < TimeSpan.Zero) master = TimeSpan.Zero;
+                        if (Duration > TimeSpan.Zero && master > Duration) master = Duration;
+
+                        var target = master + PlaybackDecodeAhead;
+                        if (Duration > TimeSpan.Zero && target > Duration) target = Duration;
+
+                        // If we are already sufficiently ahead, back off.
+                        var ahead = _ptsCurr - master;
+                        if (ahead >= PlaybackDecodeLowWater)
+                        {
+                            Thread.Sleep(2);
+                            continue;
+                        }
+
+                        EnsureDecodedUpTo(target);
+
+                        if (_endOfStream)
+                        {
+                            // We reached the end; no need to keep spinning.
+                            Thread.Sleep(10);
+                        }
+                    }
+                    finally
+                    {
+                        _decodeGate.Release();
+                    }
+                }
+                catch
+                {
+                    Thread.Sleep(5);
+                }
+            }
+        }, token);
+    }
+
+    public void StopPlaybackDecodeLoop()
+    {
+        try { _playDecodeCts?.Cancel(); } catch { }
+        _playDecodeCts = null;
+        _playDecodeTask = null;
+    }
+
+    private void RequestDecodeUpTo(TimeSpan masterTime)
+    {
         if (_isDisposed) return;
 
         if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
         if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
 
-        EnsureDecodedUpTo(masterTime);
+        // Coalesce: always keep only the latest target.
+        _decodeTargetTicks = masterTime.Ticks;
+        _decodeSeqRequested = Interlocked.Increment(ref _decodeSeq);
+
+        _ = Task.Run(() =>
+        {
+            var mySeq = _decodeSeqRequested;
+
+            if (!_decodeGate.Wait(0))
+                return;
+
+            try
+            {
+                // Decode to the most recent request. If newer arrives while decoding, loop once more.
+                while (true)
+                {
+                    var target = new TimeSpan(Interlocked.Read(ref _decodeTargetTicks));
+                    EnsureDecodedUpTo(target);
+
+                    // If no newer request since we started this iteration, we're done.
+                    if (mySeq == _decodeSeqRequested)
+                        break;
+
+                    mySeq = _decodeSeqRequested;
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _decodeGate.Release();
+            }
+        });
+    }
+
+    public void RenderAtSync(TimeSpan masterTime)
+    {
+        if (!_useGpu && _writeableBitmap == null) return;
+        if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
+        if (_isDisposed) return;
+
+        masterTime = ClampToDecodeableTime(masterTime);
+
+        // Do not block the UI thread for decode. Ask background worker to decode up to this time.
+        RequestDecodeUpTo(masterTime);
 
         Position = masterTime;
-        PositionChanged?.Invoke(this, Position);
+        _uiDispatcher?.BeginInvoke(() =>
+        {
+            try { PositionChanged?.Invoke(this, Position); } catch { }
+        });
 
         lock (_renderLock)
         {
@@ -133,34 +310,8 @@ public unsafe class VideoEngine : IDisposable
             }
         }
 
-        // Capture locals so Dispose/Unload can't null/zero them while a UI callback is pending.
-        var wb = _writeableBitmap;
-        var buffer = _compositedBuffer;
-        var width = _width;
-        var height = _height;
-        var stride = _stride;
-        var gen = _renderGeneration;
-
-        _uiDispatcher?.Invoke(() =>
-        {
-            try
-            {
-                if (_isDisposed) return;
-                if (gen != _renderGeneration) return;
-                if (!ReferenceEquals(wb, _writeableBitmap)) return;
-                if (buffer != _compositedBuffer) return;
-                if (wb == null) return;
-                if (buffer == IntPtr.Zero) return;
-                if (width <= 0 || height <= 0 || stride <= 0) return;
-
-                wb.Lock();
-                wb.WritePixels(new Int32Rect(0, 0, width, height), buffer, stride * height, stride);
-                wb.Unlock();
-            }
-            catch
-            {
-            }
-        });
+        // Upload using the same coalesced UI path as RenderAt to avoid blocking.
+        QueueUiUpload(_compositedBuffer, _width, _height, _stride, _renderGeneration, _useGpu);
     }
 
     public void SetSubtitleContent(string content)
@@ -181,8 +332,16 @@ public unsafe class VideoEngine : IDisposable
 
     public void SeekTo(TimeSpan position)
     {
-        if (position < TimeSpan.Zero) position = TimeSpan.Zero;
-        if (Duration > TimeSpan.Zero && position > Duration) position = Duration;
+        StopPlaybackDecodeLoop();
+
+        // Prevent background decode from touching decoder while we perform seek/decode.
+        _decodeGate.Wait();
+        try
+        {
+        _endOfStream = false;
+        _mediaEndedRaised = 0;
+
+        position = ClampToDecodeableTime(position);
 
         Position = position;
 
@@ -216,12 +375,43 @@ public unsafe class VideoEngine : IDisposable
         }
 
         RenderAt(position);
+        }
+        finally
+        {
+            _decodeGate.Release();
+        }
+    }
+
+    private TimeSpan ClampToDecodeableTime(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (Duration > TimeSpan.Zero && t > Duration) t = Duration;
+
+        // Many decoders cannot reliably seek/decode exactly at Duration.
+        // Clamp to the last full frame to avoid end-of-stream edge cases.
+        if (Duration > TimeSpan.Zero)
+        {
+            var fps = FrameRate;
+            if (fps > 0 && !double.IsNaN(fps) && !double.IsInfinity(fps))
+            {
+                var frame = TimeSpan.FromSeconds(1.0 / fps);
+                var last = Duration - frame;
+                if (last > TimeSpan.Zero && t >= Duration)
+                    t = last;
+                if (t > last && last > TimeSpan.Zero)
+                    t = last;
+            }
+        }
+
+        return t;
     }
 
     private long ToFrameCacheKey(TimeSpan t)
     {
-        // Quantize by ~30fps for cache reuse.
-        return (long)Math.Round(t.TotalMilliseconds / 33.0);
+        // Frame-index based cache key for better reuse across varying FPS.
+        var fps = FrameRate;
+        if (fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps)) fps = 30;
+        return (long)Math.Round(t.TotalSeconds * fps);
     }
 
     private bool TryGetCachedFrame(long key, out byte[] data)
@@ -278,18 +468,21 @@ public unsafe class VideoEngine : IDisposable
     /// </summary>
     public void RenderAt(TimeSpan masterTime)
     {
-        if (_writeableBitmap == null) return;
+        if (!_useGpu && _writeableBitmap == null) return;
         if (_frameCurr == IntPtr.Zero || _framePrev == IntPtr.Zero || _compositedBuffer == IntPtr.Zero) return;
         if (_isDisposed) return;
 
-        if (masterTime < TimeSpan.Zero) masterTime = TimeSpan.Zero;
-        if (Duration > TimeSpan.Zero && masterTime > Duration) masterTime = Duration;
+        masterTime = ClampToDecodeableTime(masterTime);
 
-        // Drive decode forward to masterTime.
-        EnsureDecodedUpTo(masterTime);
+        // Decode slightly ahead to keep playback smooth.
+        // Render still uses masterTime (audio clock), decode runs ahead and frames are dropped as needed.
+        RequestDecodeUpTo(masterTime + PlaybackDecodeAhead);
 
         Position = masterTime;
-        PositionChanged?.Invoke(this, Position);
+        _uiDispatcher?.BeginInvoke(() =>
+        {
+            try { PositionChanged?.Invoke(this, Position); } catch { }
+        });
 
         lock (_renderLock)
         {
@@ -308,27 +501,57 @@ public unsafe class VideoEngine : IDisposable
         }
 
         // Capture locals so Dispose/Unload can't null/zero them while a UI callback is pending.
-        var wb = _writeableBitmap;
         var buffer = _compositedBuffer;
         var width = _width;
         var height = _height;
         var stride = _stride;
         var gen = _renderGeneration;
+        var useGpu = _useGpu;
+        var gpu = _d3dImageRenderer;
+        var wb = _writeableBitmap;
 
-        _uiDispatcher?.BeginInvoke(() =>
+        QueueUiUpload(buffer, width, height, stride, gen, useGpu);
+    }
+
+    private void QueueUiUpload(IntPtr buffer, int width, int height, int stride, int gen, bool useGpu)
+    {
+        if (_uiDispatcher == null) return;
+
+        // Keep only latest upload parameters.
+        _uiUploadBuffer = buffer;
+        _uiUploadWidth = width;
+        _uiUploadHeight = height;
+        _uiUploadStride = stride;
+        _uiUploadGen = gen;
+        _uiUploadUseGpu = useGpu;
+
+        if (Interlocked.Exchange(ref _uiUploadQueued, 1) != 0)
+            return;
+
+        _uiDispatcher.BeginInvoke(() =>
         {
             try
             {
+                Interlocked.Exchange(ref _uiUploadQueued, 0);
+
                 if (_isDisposed) return;
-                if (gen != _renderGeneration) return;
-                if (!ReferenceEquals(wb, _writeableBitmap)) return;
-                if (buffer != _compositedBuffer) return;
+                if (_uiUploadGen != _renderGeneration) return;
+                if (_uiUploadBuffer == IntPtr.Zero) return;
+                if (_uiUploadWidth <= 0 || _uiUploadHeight <= 0 || _uiUploadStride <= 0) return;
+
+                var gpu = _d3dImageRenderer;
+                if (_uiUploadUseGpu && gpu != null)
+                {
+                    gpu.UpdateFromBgra32Buffer(_uiUploadBuffer, _uiUploadStride);
+                    return;
+                }
+
+                var wb = _writeableBitmap;
                 if (wb == null) return;
-                if (buffer == IntPtr.Zero) return;
-                if (width <= 0 || height <= 0 || stride <= 0) return;
 
                 wb.Lock();
-                wb.WritePixels(new Int32Rect(0, 0, width, height), buffer, stride * height, stride);
+                wb.WritePixels(new Int32Rect(0, 0, _uiUploadWidth, _uiUploadHeight), _uiUploadBuffer,
+                    _uiUploadStride * _uiUploadHeight, _uiUploadStride);
                 wb.Unlock();
             }
             catch
@@ -339,25 +562,44 @@ public unsafe class VideoEngine : IDisposable
 
     private void EnsureDecodedUpTo(TimeSpan masterTime)
     {
-        // Decode forward until current PTS >= masterTime (then we can choose prev or curr).
-        // If decode runs ahead, we will pick prev.
-        while (_ptsCurr < masterTime)
+        if (_isDisposed) return;
+        if (_endOfStream) return;
+
+        bool raiseEnded = false;
+
+        lock (_renderLock)
         {
-            if (!DecodeNextIntoCurrent(out var pts))
+            // Decode forward until current PTS >= masterTime (then we can choose prev or curr).
+            // If decode runs ahead, we will pick prev.
+            while (_ptsCurr < masterTime)
             {
-                MediaEnded?.Invoke(this, EventArgs.Empty);
-                return;
+                if (!DecodeNextIntoCurrent(out var pts))
+                {
+                    _endOfStream = true;
+                    _ptsPrev = Duration;
+                    _ptsCurr = Duration;
+
+                    raiseEnded = true;
+                    break;
+                }
+
+                // shift current to prev (swap buffers)
+                var tmp = _framePrev;
+                _framePrev = _frameCurr;
+                _frameCurr = tmp;
+                _ptsPrev = _ptsCurr;
+                _ptsCurr = pts;
+
+                // Copy decoded BGRA into new current buffer
+                Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
             }
+        }
 
-            // shift current to prev (swap buffers)
-            var tmp = _framePrev;
-            _framePrev = _frameCurr;
-            _frameCurr = tmp;
-            _ptsPrev = _ptsCurr;
-            _ptsCurr = pts;
-
-            // Copy decoded BGRA into new current buffer
-            Buffer.MemoryCopy((void*)_decoder.GetBgraBufferPointer(), (void*)_frameCurr, (long)(_stride * _height), (long)(_stride * _height));
+        // Never raise events while holding locks (can deadlock UI thread).
+        if (raiseEnded)
+        {
+            if (Interlocked.Exchange(ref _mediaEndedRaised, 1) == 0)
+                MediaEnded?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -411,6 +653,7 @@ public unsafe class VideoEngine : IDisposable
 
         _uiDispatcher?.Invoke(() =>
         {
+            // Create CPU fallback buffer.
             _writeableBitmap = new WriteableBitmap(_width, _height, 96, 96, PixelFormats.Bgra32, null);
         });
     }
@@ -504,7 +747,10 @@ public unsafe class VideoEngine : IDisposable
         _isDisposed = true;
         _renderGeneration++;
 
+        StopPlaybackDecodeLoop();
+
         _assRenderer?.Dispose();
+        try { _d3dImageRenderer?.Dispose(); } catch { }
         _decoder.Dispose();
 
         _writeableBitmap = null;

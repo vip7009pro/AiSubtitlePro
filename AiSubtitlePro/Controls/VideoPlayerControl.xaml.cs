@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AiSubtitlePro.Infrastructure.Media;
+using AiSubtitlePro.Infrastructure.Rendering;
 
 namespace AiSubtitlePro.Controls;
 
@@ -142,11 +143,16 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         InitializeComponent();
         InitializeEngine();
 
-        _scrubTimer = new DispatcherTimer(DispatcherPriority.Render)
-        {
-            Interval = TimeSpan.FromMilliseconds(33) // ~30fps during scrubbing
-        };
+        _scrubTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
         _scrubTimer.Tick += (_, __) => ApplyPendingScrubSeek();
+
+        try
+        {
+            D3D11InteropCheckBox.IsChecked = D3DImageRenderer.EnableD3D11SharedInterop;
+        }
+        catch
+        {
+        }
 
         // Ensure one-tap click-to-seek works even if Slider template handles the mouse event.
         TimelineSlider.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,
@@ -184,12 +190,15 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
             _videoEngine.MediaEnded += (s, e) =>
             {
-                Dispatcher.Invoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
+                Dispatcher.BeginInvoke(() => MediaEnded?.Invoke(this, EventArgs.Empty));
             };
 
             // Bind Image
             VideoImage.Source = _videoEngine.VideoSource;
             Log("VideoPlayerControl: engine initialized; VideoImage.Source bound.");
+
+            // Apply current subtitle content immediately (DP may have been set before engine init).
+            UpdateSubtitleOverlay(CurrentSubtitle);
 
             // Do not render continuously while idle; render will be attached on Play or one-shot render requests.
         }
@@ -209,6 +218,8 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         catch
         {
         }
+
+        try { _videoEngine?.StopPlaybackDecodeLoop(); } catch { }
 
         try
         {
@@ -281,8 +292,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         if (nowTick - _lastRenderTick < minTicks)
             return;
 
-        // Audio device playback position is the master clock.
-        var t = audio.GetAudioTime();
+        // Audio device playback position is the master clock while playing.
+        // While paused, use the current Position to avoid jumping back to the last pause point.
+        var t = audio.IsPlaying ? audio.GetAudioTime() : Position;
 
         // Clamp to trim range. If we hit the end, pause.
         var (trimStart, trimEnd) = GetEffectiveTrim();
@@ -429,6 +441,9 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
             Log("VideoPlayerControl: LoadMedia success; playback ready (not auto-playing).");
 
+            // Ensure subtitles are applied before first-frame render.
+            UpdateSubtitleOverlay(CurrentSubtitle);
+
             // Sync slider range to media duration
             ApplyTrimToUiAndPosition();
 
@@ -476,6 +491,14 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             SeekTo(start);
 
         _audioClock?.Play();
+        IsPlaying = _audioClock?.IsPlaying == true;
+
+        // Continuous decode loop for smoother playback.
+        var engine = _videoEngine;
+        var audio = _audioClock;
+        if (engine != null && audio != null)
+            engine.StartPlaybackDecodeLoop(() => audio.GetAudioTime());
+
         AttachRenderLoop();
         _renderOnceRequested = true;
     }
@@ -484,9 +507,14 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     {
         _audioClock?.Pause();
 
-        // Re-render at current audio time for instant subtitle update.
-        var t = _audioClock?.GetAudioTime() ?? Position;
+        // Keep DP in sync even if we detach render loop immediately.
+        IsPlaying = false;
+
+        // Re-render at current Position while paused to avoid using stale audio clock time.
+        var t = _audioClock?.IsPlaying == true ? (_audioClock?.GetAudioTime() ?? Position) : Position;
         _videoEngine?.RenderAt(t);
+
+        try { _videoEngine?.StopPlaybackDecodeLoop(); } catch { }
 
         _renderOnceRequested = false;
         DetachRenderLoop();
@@ -495,6 +523,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
     public void Stop()
     {
         _audioClock?.Stop();
+        try { _videoEngine?.StopPlaybackDecodeLoop(); } catch { }
         var (start, _) = GetEffectiveTrim();
         _videoEngine?.SeekTo(start);
         _audioClock?.Seek(start);
@@ -576,6 +605,41 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         AttachRenderLoop();
     }
 
+    public void ForceRenderNow()
+    {
+        var engine = _videoEngine;
+        if (engine == null) return;
+
+        var t = _audioClock?.IsPlaying == true ? (_audioClock?.GetAudioTime() ?? Position) : Position;
+        try
+        {
+            engine.RenderAt(t);
+        }
+        catch
+        {
+        }
+
+        _renderOnceRequested = true;
+        AttachRenderLoop();
+    }
+
+    public void ForceRenderAt(TimeSpan position)
+    {
+        var engine = _videoEngine;
+        if (engine == null) return;
+
+        try
+        {
+            engine.RenderAt(position);
+        }
+        catch
+        {
+        }
+
+        _renderOnceRequested = true;
+        AttachRenderLoop();
+    }
+
     private void VideoImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         // Require double-click to set subtitle position to avoid accidental changes.
@@ -606,6 +670,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
         var xi = (int)Math.Round(Math.Clamp(x, 0, engine.VideoWidth));
         var yi = (int)Math.Round(Math.Clamp(y, 0, engine.VideoHeight));
         VideoClicked?.Invoke(this, (xi, yi));
+        e.Handled = true;
     }
 
     private void ApplyAudioVolumeFromUi()
@@ -743,7 +808,7 @@ public partial class VideoPlayerControl : UserControl, IDisposable
 
         // Coalesce: only the latest scrub request should be processed.
         var seq = Interlocked.Increment(ref _scrubSeq);
-        ApplyScrubSeek(seq, _pendingScrubTime);
+        _ = Task.Run(() => ApplyScrubSeek(seq, _pendingScrubTime));
     }
 
     private void ApplyScrubSeek(int seq, TimeSpan position)
@@ -775,14 +840,27 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             if (!_isDragging) return;
             if (seq != Volatile.Read(ref _scrubSeq)) return;
 
-            Position = position;
-            Duration = engine.Duration;
-            IsPlaying = _audioClock?.IsPlaying == true;
-            UpdateTimeDisplay();
-            PositionChanged?.Invoke(this, position);
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (_isDisposed) return;
+                    if (!_isDragging) return;
+                    if (seq != Volatile.Read(ref _scrubSeq)) return;
 
-            _lastRenderedTime = position;
-            _renderOnceRequested = false;
+                    Position = position;
+                    Duration = engine.Duration;
+                    IsPlaying = _audioClock?.IsPlaying == true;
+                    UpdateTimeDisplay();
+                    PositionChanged?.Invoke(this, position);
+
+                    _lastRenderedTime = position;
+                    _renderOnceRequested = false;
+                }
+                catch
+                {
+                }
+            });
         }
         catch
         {
@@ -809,6 +887,72 @@ public partial class VideoPlayerControl : UserControl, IDisposable
             engine.Volume = (int)e.NewValue;
 
         ApplyAudioVolumeFromUi();
+    }
+
+    private void D3D11InteropCheckBox_Checked(object sender, RoutedEventArgs e)
+    {
+        ApplyD3D11InteropSetting(enabled: true);
+    }
+
+    private void D3D11InteropCheckBox_Unchecked(object sender, RoutedEventArgs e)
+    {
+        ApplyD3D11InteropSetting(enabled: false);
+    }
+
+    private void ApplyD3D11InteropSetting(bool enabled)
+    {
+        try
+        {
+            D3DImageRenderer.EnableD3D11SharedInterop = enabled;
+            Log($"VideoPlayerControl: D3D11 interop toggled -> {enabled}");
+        }
+        catch
+        {
+            return;
+        }
+
+        var path = Source;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+
+        var engine = _videoEngine;
+        var audio = _audioClock;
+        if (engine == null || audio == null)
+            return;
+
+        var pos = Position;
+        var wasPlaying = IsPlaying;
+
+        try
+        {
+            Pause();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            engine.LoadMedia(path);
+            audio.Load(path);
+            ApplyAudioVolumeFromUi();
+
+            audio.Seek(pos);
+            engine.SeekTo(pos);
+            engine.RenderAt(pos);
+
+            _renderOnceRequested = true;
+            AttachRenderLoop();
+        }
+        catch (Exception ex)
+        {
+            Log($"VideoPlayerControl: failed to reinitialize after D3D11 toggle. {ex}");
+        }
+
+        if (wasPlaying)
+        {
+            try { Play(); } catch { }
+        }
     }
 
     #endregion

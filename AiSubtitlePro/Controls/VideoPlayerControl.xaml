@@ -75,6 +75,11 @@
 
                 <!-- Volume -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <CheckBox x:Name="D3D11InteropCheckBox" Content="D3D11" Margin="0,0,6,0"
+                              VerticalAlignment="Center"
+                              ToolTip="Enable D3D11 shared-texture interop (may be black on some drivers)"
+                              Checked="D3D11InteropCheckBox_Checked"
+                              Unchecked="D3D11InteropCheckBox_Unchecked" />
                     <Button x:Name="MuteButton" Click="Mute_Click" Style="{StaticResource ToolButtonStyle}">
                         <materialDesign:PackIcon x:Name="VolumeIcon" Kind="VolumeHigh" Width="20" Height="20" />
                     </Button>

@@ -27,8 +27,8 @@
         <KeyBinding Key="Space" Modifiers="Ctrl" Command="{Binding PlayCurrentLineCommand}" />
         
         <!-- 3. Timing -->
-        <KeyBinding Key="Q" Command="{Binding SetStartTimeCommand}" />
-        <KeyBinding Key="W" Command="{Binding SetEndTimeCommand}" />
+        <KeyBinding Key="Q" Modifiers="Ctrl" Command="{Binding SetStartTimeCommand}" />
+        <KeyBinding Key="W" Modifiers="Ctrl" Command="{Binding SetEndTimeCommand}" />
         <KeyBinding Key="D" Modifiers="Ctrl" Command="{Binding CommitCommand}" />
         
         <!-- 4. Edit -->
@@ -354,7 +354,7 @@
                                              Background="White" Foreground="#111111" CaretBrush="#111111"
                                              BorderBrush="#C9C9C9" BorderThickness="1" Padding="6,0"/>
                                     <TextBlock Text="Dur" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBlock Text="{Binding SelectedLine.Duration, StringFormat='s\.ff'}" VerticalAlignment="Center" Foreground="Gray"/>
+                                    <TextBlock Text="{Binding SelectedLine.Duration, StringFormat={}{0:ss\\.ff}}" VerticalAlignment="Center" Foreground="Gray"/>
                                 </WrapPanel>
 
                                 <!-- Style Edits -->
@@ -456,6 +456,7 @@
                              Style="{StaticResource SubtitleGridStyle}"
                              RowStyle="{StaticResource SubtitleGridRowStyle}"
                              CellStyle="{StaticResource SubtitleGridCellStyle}"
+                             CanUserSortColumns="False"
                              SelectionMode="Extended"
                              SelectionUnit="FullRow"
                              PreviewKeyDown="SubtitleGrid_PreviewKeyDown"
@@ -467,10 +468,10 @@
                             </ContextMenu>
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40" IsReadOnly="True" />
-                            <DataGridTextColumn Header="Start" Binding="{Binding Start, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" />
-                            <DataGridTextColumn Header="End" Binding="{Binding End, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" />
-                            <DataGridTextColumn Header="Text" Binding="{Binding Text}" Width="*" IsReadOnly="True" />
+                            <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40" IsReadOnly="True" CanUserSort="False" />
+                            <DataGridTextColumn Header="Start" Binding="{Binding Start, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" CanUserSort="False" />
+                            <DataGridTextColumn Header="End" Binding="{Binding End, StringFormat='{}{0:h\\:mm\\:ss\\.ff}'}" Width="90" IsReadOnly="True" CanUserSort="False" />
+                            <DataGridTextColumn Header="Text" Binding="{Binding Text}" Width="*" IsReadOnly="True" CanUserSort="False" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

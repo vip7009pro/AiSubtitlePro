@@ -18,6 +18,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using AiSubtitlePro.Services;
+using System.Windows.Threading;
 
 namespace AiSubtitlePro.ViewModels;
 
@@ -53,6 +54,9 @@ public partial class MainViewModel : ObservableObject
     private bool _subtitleCacheDirty = true;
     private List<SubtitleLine> _linesByStart = new();
     private List<SubtitleLine> _lastActiveLines = new();
+
+    private readonly DispatcherTimer _previewDebounceTimer;
+    private bool _previewDebouncePending;
 
     private bool _exportHardSubLastVertical;
     private int _exportHardSubLastBlurSigma = 20;
@@ -172,6 +176,18 @@ public partial class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
+        _previewDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(80)
+        };
+        _previewDebounceTimer.Tick += (_, __) =>
+        {
+            _previewDebounceTimer.Stop();
+            if (!_previewDebouncePending) return;
+            _previewDebouncePending = false;
+            RefreshSubtitlePreview();
+        };
+
         TryCleanupTempFiles();
 
         try
@@ -231,6 +247,21 @@ public partial class MainViewModel : ObservableObject
 
         CanUndo = _undo.CanUndo;
         CanRedo = _undo.CanRedo;
+    }
+
+    private void RequestSubtitlePreviewRebuild(bool immediate)
+    {
+        if (immediate)
+        {
+            try { _previewDebounceTimer.Stop(); } catch { }
+            _previewDebouncePending = false;
+            RefreshSubtitlePreview();
+            return;
+        }
+
+        _previewDebouncePending = true;
+        if (!_previewDebounceTimer.IsEnabled)
+            _previewDebounceTimer.Start();
     }
 
     partial void OnCurrentDocumentChanged(SubtitleDocument? value)
@@ -602,8 +633,6 @@ public partial class MainViewModel : ObservableObject
             ActiveSubtitleText = activeLines.Count > 0
                 ? string.Join("\n", activeLines.Select(l => l.Text))
                 : string.Empty;
-
-            ActiveSubtitleAss = BuildAssForPreview(CurrentDocument, activeLines);
         }
     }
 
@@ -892,7 +921,12 @@ public partial class MainViewModel : ObservableObject
             var text = line.Text ?? string.Empty;
             var m = AssPosRegex.Match(text);
             if (!m.Success)
+            {
+                // If the user removed the \pos tag, revert back to default (style-based) position.
+                if (line.PosX.HasValue) line.PosX = null;
+                if (line.PosY.HasValue) line.PosY = null;
                 return;
+            }
 
             if (!int.TryParse(m.Groups[1].Value, out var px))
                 return;
@@ -1007,7 +1041,11 @@ public partial class MainViewModel : ObservableObject
                 HandleSelectedLineOverrideChanged();
                 SyncSelectedStyleFromLine();
             }
-            RefreshSubtitlePreview();
+
+            // Text edits happen per-keystroke -> debounce to avoid UI stalls.
+            // Timing/style/pos edits should apply immediately.
+            var immediate = e.PropertyName != nameof(SubtitleLine.Text);
+            RequestSubtitlePreviewRebuild(immediate);
         }
 
         if (sender == SelectedLine)
@@ -1096,13 +1134,32 @@ public partial class MainViewModel : ObservableObject
 
     public void RefreshSubtitlePreview()
     {
-        OnCurrentPositionChanged(CurrentPosition);
+        try
+        {
+            var doc = CurrentDocument;
+            if (doc == null)
+            {
+                ActiveSubtitleText = string.Empty;
+                ActiveSubtitleAss = string.Empty;
+                return;
+            }
+
+            ActiveSubtitleAss = BuildAssForPreview(doc);
+            ActiveSubtitleText = SelectedLine?.Text ?? string.Empty;
+
+            _lastSubtitleOverlayUpdateTick = 0;
+            _lastActiveLines = new List<SubtitleLine>();
+        }
+        catch
+        {
+        }
     }
+
 
     partial void OnSelectedStyleFontNameChanged(string value)
     {
         if (_isSyncingSelectedStyle) return;
-        UpdateSelectedStyle(s => s.FontName = string.IsNullOrWhiteSpace(value) ? "Arial" : value);
+        UpdateSelectedStyle(s => s.FontName = value);
     }
 
     partial void OnSelectedStyleFontSizeChanged(double value)
@@ -1111,17 +1168,20 @@ public partial class MainViewModel : ObservableObject
         UpdateSelectedStyle(s => s.FontSize = value);
     }
 
+
     partial void OnSelectedStylePrimaryAssColorChanged(string value)
     {
         if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.PrimaryColor = SubtitleStyle.AssToColor(value));
     }
 
+
     partial void OnSelectedStyleOutlineAssColorChanged(string value)
     {
         if (_isSyncingSelectedStyle) return;
         UpdateSelectedStyle(s => s.OutlineColor = SubtitleStyle.AssToColor(value));
     }
+
 
     partial void OnSelectedStyleBackAssColorChanged(string value)
     {
@@ -1222,7 +1282,10 @@ public partial class MainViewModel : ObservableObject
                 doc.IsDirty = true;
             }));
 
-        OnCurrentPositionChanged(CurrentPosition);
+        // Force overlay rebuild even if the active line set is unchanged.
+        _lastActiveLines = new List<SubtitleLine>();
+        _lastSubtitleOverlayUpdateTick = 0;
+        RequestSubtitlePreviewRebuild(immediate: true);
     }
 
     public void CommitSelectedLineTextEdit(string? oldText, string? newText)
@@ -1256,6 +1319,9 @@ public partial class MainViewModel : ObservableObject
             execute: () => { line.PosX = x; line.PosY = y; doc.IsDirty = true; },
             undo: () => { line.PosX = oldX; line.PosY = oldY; doc.IsDirty = true; }));
 
+        // Force overlay rebuild even if the active line set is unchanged.
+        _lastActiveLines = new List<SubtitleLine>();
+        _lastSubtitleOverlayUpdateTick = 0;
         RefreshSubtitlePreview();
     }
 
@@ -1293,16 +1359,12 @@ public partial class MainViewModel : ObservableObject
         return clone;
     }
 
-    private static string BuildAssForPreview(SubtitleDocument doc, List<SubtitleLine> activeLines)
+    private static string BuildAssForPreview(SubtitleDocument doc)
     {
-        if (activeLines.Count == 0)
+        if (doc.Lines.Count == 0)
             return string.Empty;
 
-        var stylesToInclude = activeLines
-            .Select(l => l.StyleName)
-            .Distinct(StringComparer.Ordinal)
-            .Select(doc.GetStyle)
-            .ToList();
+        var stylesToInclude = doc.Styles.ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine("[Script Info]");
@@ -1317,7 +1379,6 @@ public partial class MainViewModel : ObservableObject
         sb.AppendLine("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding");
         foreach (var st in stylesToInclude)
         {
-            // Force box mode if desired by style.BorderStyle
             sb.AppendLine(string.Format(CultureInfo.InvariantCulture,
                 "Style: {0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}",
                 st.Name,
@@ -1348,7 +1409,7 @@ public partial class MainViewModel : ObservableObject
         sb.AppendLine();
         sb.AppendLine("[Events]");
         sb.AppendLine("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
-        foreach (var l in activeLines)
+        foreach (var l in doc.Lines)
         {
             var text = (l.Text ?? string.Empty)
                 .Replace("\r\n", "\\N")
@@ -1357,15 +1418,29 @@ public partial class MainViewModel : ObservableObject
 
             var overrideTags = string.Empty;
             if (l.PosX.HasValue && l.PosY.HasValue)
-            {
                 overrideTags = $"{{\\pos({l.PosX.Value},{l.PosY.Value})}}";
-            }
 
-            // For preview, we keep dialogue always-on.
-            sb.AppendLine($"Dialogue: {l.Layer},0:00:00.00,9:59:59.99,{l.StyleName},{l.Actor},{l.MarginL},{l.MarginR},{l.MarginV},{l.Effect},{overrideTags}{text}");
+            var start = l.Start;
+            var end = l.End;
+            if (end < start) end = start;
+
+            sb.AppendLine($"Dialogue: {l.Layer},{FormatAssTime(start)},{FormatAssTime(end)},{l.StyleName},{l.Actor},{l.MarginL},{l.MarginR},{l.MarginV},{l.Effect},{overrideTags}{text}");
         }
 
         return sb.ToString();
+    }
+
+    private static string FormatAssTime(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        var cs = (int)Math.Round(t.TotalMilliseconds / 10.0);
+        var h = cs / (100 * 60 * 60);
+        cs -= h * 100 * 60 * 60;
+        var m = cs / (100 * 60);
+        cs -= m * 100 * 60;
+        var s = cs / 100;
+        cs -= s * 100;
+        return string.Format(CultureInfo.InvariantCulture, "{0}:{1:D2}:{2:D2}.{3:D2}", h, m, s, cs);
     }
 
     #region File Commands
@@ -1417,12 +1492,9 @@ public partial class MainViewModel : ObservableObject
             MediaFilePath = dialog.FileName;
             StatusMessage = $"Loaded media: {Path.GetFileName(dialog.FileName)}";
 
-            // If we already have an ASS/SSA document opened, consider this a project link change.
-            // Mark dirty so a normal Save will persist the Video File link.
             if (CurrentDocument != null)
                 CurrentDocument.IsDirty = true;
 
-            // Reset cut range when opening new media.
             CutStartAbs = TimeSpan.Zero;
             CutEndAbs = TimeSpan.Zero;
             _cutSourceDocument = null;
