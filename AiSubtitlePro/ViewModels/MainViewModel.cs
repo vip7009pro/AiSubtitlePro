@@ -41,6 +41,13 @@ public partial class MainViewModel : ObservableObject
     private FfmpegOperation _ffmpegOperation = FfmpegOperation.None;
     private readonly SemaphoreSlim _ffmpegGate = new(1, 1);
     private CancellationTokenSource? _exportCts;
+
+    private bool _exportHardSubLastVertical;
+    private int _exportHardSubLastBlurSigma = 20;
+    private bool _exportHardSubLastEnableTrailer;
+    private TimeSpan _exportHardSubLastTrailerStart = TimeSpan.Zero;
+    private TimeSpan _exportHardSubLastTrailerDuration = TimeSpan.FromSeconds(5);
+    private TimeSpan _exportHardSubLastTrailerTransition = TimeSpan.FromSeconds(1);
     private DateTime _ffmpegOperationStartedUtc;
 
     [ObservableProperty]
@@ -1733,9 +1740,22 @@ public partial class MainViewModel : ObservableObject
                     mediaPath: mediaPath,
                     assPath: tempAssPath,
                     previewTime: ToMediaTime(CurrentPosition));
+                optionsDlg.ExportVerticalInitial = _exportHardSubLastVertical;
+                optionsDlg.BlurSigmaInitial = _exportHardSubLastBlurSigma;
+                optionsDlg.EnableTrailerInitial = _exportHardSubLastEnableTrailer;
+                optionsDlg.TrailerStartInitial = _exportHardSubLastTrailerStart;
+                optionsDlg.TrailerDurationInitial = _exportHardSubLastTrailerDuration;
+                optionsDlg.TrailerTransitionInitial = _exportHardSubLastTrailerTransition;
                 optionsDlg.Owner = Application.Current.MainWindow;
                 if (optionsDlg.ShowDialog() != true)
                     return;
+
+                _exportHardSubLastVertical = optionsDlg.ExportVertical;
+                _exportHardSubLastBlurSigma = optionsDlg.BlurSigma;
+                _exportHardSubLastEnableTrailer = optionsDlg.EnableTrailer;
+                _exportHardSubLastTrailerStart = optionsDlg.TrailerStart;
+                _exportHardSubLastTrailerDuration = optionsDlg.TrailerDuration;
+                _exportHardSubLastTrailerTransition = optionsDlg.TrailerTransition;
 
                 var saveDlg = new SaveFileDialog
                 {
@@ -1757,6 +1777,15 @@ public partial class MainViewModel : ObservableObject
                     verticalOutputPath = Path.Combine(dir, name + "_vertical" + ext);
                 }
 
+                var finalOutputPath = outputPath;
+                string? tempMainPath = null;
+                if (optionsDlg.EnableTrailer)
+                {
+                    var tempDir2 = Path.Combine(Path.GetTempPath(), "AiSubtitlePro");
+                    Directory.CreateDirectory(tempDir2);
+                    tempMainPath = Path.Combine(tempDir2, $"main_hardsub_{Guid.NewGuid():N}{Path.GetExtension(outputPath)}");
+                }
+
                 // Ensure UI updates even if FFmpeg progress messages are delayed.
                 StatusMessage = "Exporting hard-sub video...";
 
@@ -1773,51 +1802,77 @@ public partial class MainViewModel : ObservableObject
                     await _ffmpegService.RenderHardSubAsync(
                         mediaPath,
                         tempAssPath,
-                        outputPath,
+                        tempMainPath ?? outputPath,
                         start: startAbs,
                         duration: segDuration,
                         preferGpuEncoding: true,
                         cancellationToken: _exportCts.Token);
 
-                    if (!string.IsNullOrWhiteSpace(verticalOutputPath))
+                    if (optionsDlg.EnableTrailer && !string.IsNullOrWhiteSpace(tempMainPath))
                     {
-                        FfmpegProgressText = "Exporting vertical hard-sub video";
-                        StatusMessage = "Exporting vertical hard-sub video...";
-                        await _ffmpegService.RenderHardSubVerticalBlurAsync(
-                            mediaPath,
-                            tempAssPath,
-                            verticalOutputPath,
-                            start: startAbs,
-                            duration: segDuration,
-                            width: 1080,
-                            height: 1920,
-                            blurSigma: optionsDlg.BlurSigma,
+                        FfmpegProgressText = "Prepending trailer";
+                        StatusMessage = "Prepending trailer...";
+                        await _ffmpegService.PrependTrailerWithTransitionAsync(
+                            trailerVideoPath: tempMainPath,
+                            trailerStart: optionsDlg.TrailerStart,
+                            trailerDuration: optionsDlg.TrailerDuration,
+                            mainVideoPath: tempMainPath,
+                            outputVideoPath: finalOutputPath,
+                            transitionDuration: optionsDlg.TrailerTransition,
                             preferGpuEncoding: true,
                             cancellationToken: _exportCts.Token);
                     }
                 }
                 else
                 {
-                    await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, outputPath, preferGpuEncoding: true, _exportCts.Token);
+                    await _ffmpegService.RenderHardSubAsync(mediaPath, tempAssPath, tempMainPath ?? outputPath, preferGpuEncoding: true, _exportCts.Token);
 
-                    if (!string.IsNullOrWhiteSpace(verticalOutputPath))
+                    if (optionsDlg.EnableTrailer && !string.IsNullOrWhiteSpace(tempMainPath))
                     {
-                        FfmpegProgressText = "Exporting vertical hard-sub video";
-                        StatusMessage = "Exporting vertical hard-sub video...";
-                        await _ffmpegService.RenderHardSubVerticalBlurAsync(
-                            mediaPath,
-                            tempAssPath,
-                            verticalOutputPath,
-                            width: 1080,
-                            height: 1920,
-                            blurSigma: optionsDlg.BlurSigma,
+                        FfmpegProgressText = "Prepending trailer";
+                        StatusMessage = "Prepending trailer...";
+                        await _ffmpegService.PrependTrailerWithTransitionAsync(
+                            trailerVideoPath: tempMainPath,
+                            trailerStart: optionsDlg.TrailerStart,
+                            trailerDuration: optionsDlg.TrailerDuration,
+                            mainVideoPath: tempMainPath,
+                            outputVideoPath: finalOutputPath,
+                            transitionDuration: optionsDlg.TrailerTransition,
                             preferGpuEncoding: true,
                             cancellationToken: _exportCts.Token);
                     }
                 }
 
+                if (!string.IsNullOrWhiteSpace(verticalOutputPath))
+                {
+                    FfmpegProgressText = "Exporting vertical blur video";
+                    StatusMessage = "Exporting vertical blur video...";
+                    await _ffmpegService.ConvertToVerticalBlurAsync(
+                        inputVideoPath: finalOutputPath,
+                        outputVideoPath: verticalOutputPath,
+                        width: 1080,
+                        height: 1920,
+                        blurSigma: optionsDlg.BlurSigma,
+                        preferGpuEncoding: true,
+                        cancellationToken: _exportCts.Token);
+                }
+
+                if (!string.IsNullOrWhiteSpace(tempMainPath))
+                {
+                    try
+                    {
+                        if (File.Exists(tempMainPath))
+                            File.Delete(tempMainPath);
+                    }
+                    catch
+                    {
+                    }
+                }
+
                 var elapsed = DateTime.UtcNow - _ffmpegOperationStartedUtc;
-                StatusMessage = $"Export complete: {Path.GetFileName(outputPath)} (elapsed {FormatElapsed(elapsed)})";
+                StatusMessage = !string.IsNullOrWhiteSpace(verticalOutputPath)
+                    ? $"Export complete: {Path.GetFileName(outputPath)} + {Path.GetFileName(verticalOutputPath)} (elapsed {FormatElapsed(elapsed)})"
+                    : $"Export complete: {Path.GetFileName(outputPath)} (elapsed {FormatElapsed(elapsed)})";
             }
             catch (OperationCanceledException)
             {

@@ -27,6 +27,36 @@
             <StackPanel>
                 <TextBlock Text="Export Hard-Sub Options" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
 
+                <GroupBox Header="Trailer" Margin="0,0,0,12">
+                    <StackPanel Margin="10">
+                        <CheckBox x:Name="TrailerCheck" Content="Prepend a trailer segment from this video" />
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Start" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <TextBox x:Name="TrailerStartBox" Grid.Row="0" Grid.Column="1" Width="120" Text="0:00:00.00" Margin="0,0,12,0" />
+                            <Button x:Name="UseCurrentAsStartButton" Grid.Row="0" Grid.Column="2" Content="Use current" Width="110" Click="UseCurrentAsStart_Click" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Duration" Foreground="Gray" VerticalAlignment="Center" Margin="0,8,10,0" />
+                            <TextBox x:Name="TrailerDurationBox" Grid.Row="1" Grid.Column="1" Width="120" Text="0:00:05.00" Margin="0,8,12,0" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Transition" Foreground="Gray" VerticalAlignment="Center" Margin="0,8,10,0" />
+                            <TextBox x:Name="TrailerTransitionBox" Grid.Row="2" Grid.Column="1" Width="120" Text="0:00:01.00" Margin="0,8,12,0" ToolTip="Crossfade duration" />
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+
                 <GroupBox Header="Vertical Video (TikTok/Reels)" Margin="0,0,0,12">
                     <StackPanel Margin="10">
                         <CheckBox x:Name="VerticalCheck" Content="Export additional vertical video (1080x1920) with blurred background" />

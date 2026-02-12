@@ -171,6 +171,173 @@ public class FFmpegService : IDisposable
         await RunFFmpegAsync(arguments, videoPath, _cts.Token);
     }
 
+    public async Task ConvertToVerticalBlurAsync(
+        string inputVideoPath,
+        string outputVideoPath,
+        int width,
+        int height,
+        int blurSigma,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var fc =
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blurSigma}[bg];" +
+            $"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];" +
+            $"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]";
+
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
+
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var arguments = $"-i \"{inputVideoPath}\" -filter_complex \"{fc}\" -map \"[v]\" -map 0:a? -c:v {vcodec} -c:a copy -y \"{outputVideoPath}\"";
+                await RunFFmpegAsync(arguments, inputVideoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg vertical blur convert failed");
+    }
+
+    public async Task PrependTrailerWithTransitionAsync(
+        string trailerVideoPath,
+        TimeSpan trailerStart,
+        TimeSpan trailerDuration,
+        string mainVideoPath,
+        string outputVideoPath,
+        TimeSpan transitionDuration,
+        bool preferGpuEncoding,
+        CancellationToken cancellationToken = default)
+    {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        string ToFfmpegTime(TimeSpan t) => $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
+        var tStart = ToFfmpegTime(trailerStart);
+        var tDur = ToFfmpegTime(trailerDuration);
+
+        var trans = transitionDuration;
+        if (trans < TimeSpan.Zero) trans = TimeSpan.Zero;
+        if (trans > trailerDuration) trans = trailerDuration;
+        var transSec = Math.Max(0, trans.TotalSeconds);
+        var offsetSec = Math.Max(0, trailerDuration.TotalSeconds - transSec);
+
+        var hasAudio0 = await HasAudioStreamAsync(trailerVideoPath);
+        var hasAudio1 = await HasAudioStreamAsync(mainVideoPath);
+        var canDoAudio = hasAudio0 && hasAudio1;
+
+        // input0: trailer segment from trailerVideoPath
+        // input1: main (already hard-sub) video
+        // Use xfade/acrossfade when transition > 0; otherwise concat.
+        var useTransition = transSec > 0.0001;
+        var fc = string.Empty;
+        const int normalizeFps = 30;
+
+        if (useTransition)
+        {
+            fc =
+                $"[0:v]setpts=PTS-STARTPTS,fps={normalizeFps},format=yuv420p[v0];" +
+                $"[1:v]setpts=PTS-STARTPTS,fps={normalizeFps},format=yuv420p[v1];" +
+                $"[v0][v1]xfade=transition=fade:duration={transSec.ToString(System.Globalization.CultureInfo.InvariantCulture)}:offset={offsetSec.ToString(System.Globalization.CultureInfo.InvariantCulture)}[v]";
+
+            if (canDoAudio)
+            {
+                fc +=
+                    $";[0:a]asetpts=PTS-STARTPTS[a0];" +
+                    $"[1:a]asetpts=PTS-STARTPTS[a1];" +
+                    $"[a0][a1]acrossfade=d={transSec.ToString(System.Globalization.CultureInfo.InvariantCulture)}[a]";
+            }
+        }
+        else
+        {
+            fc =
+                $"[0:v]setpts=PTS-STARTPTS,fps={normalizeFps},format=yuv420p[v0];" +
+                $"[1:v]setpts=PTS-STARTPTS,fps={normalizeFps},format=yuv420p[v1];" +
+                $"[v0][v1]concat=n=2:v=1:a=0[v]";
+
+            if (canDoAudio)
+            {
+                fc +=
+                    $";[0:a]asetpts=PTS-STARTPTS[a0];" +
+                    $"[1:a]asetpts=PTS-STARTPTS[a1];" +
+                    $"[a0][a1]concat=n=2:v=0:a=1[a]";
+            }
+        }
+
+        var videoEncoders = preferGpuEncoding
+            ? new[] { "h264_nvenc", "h264_qsv", "h264_amf", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx264" }
+            : new[] { "libx264" };
+
+        Exception? lastError = null;
+        foreach (var vcodec in videoEncoders)
+        {
+            try
+            {
+                var mapAudio = canDoAudio
+                    ? "-map \"[a]\" -c:a aac -b:a 192k "
+                    : string.Empty;
+
+                var arguments =
+                    $"-hide_banner -nostdin -loglevel error -ss {tStart} -t {tDur} -i \"{trailerVideoPath}\" -i \"{mainVideoPath}\" " +
+                    $"-filter_complex \"{fc}\" -map \"[v]\" {mapAudio}-c:v {vcodec} -y \"{outputVideoPath}\"";
+
+                await RunFFmpegAsync(arguments, trailerVideoPath, _cts.Token);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new Exception("FFmpeg trailer prepend failed");
+    }
+
+    private async Task<bool> HasAudioStreamAsync(string mediaPath)
+    {
+        try
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = _ffprobePath,
+                    Arguments = $"-v error -select_streams a -show_entries stream=index -of csv=p=0 \"{mediaPath}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            return !string.IsNullOrWhiteSpace(output);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public async Task ExportMp3Async(
         string videoPath,
         string outputPath,
@@ -550,6 +717,8 @@ public class FFmpegService : IDisposable
 
         _currentProcess.Start();
 
+        var stderrTail = new Queue<string>(256);
+
         // Parse progress from stderr (FFmpeg -progress protocol reports key=value lines)
         var progressTask = Task.Run(async () =>
         {
@@ -560,6 +729,17 @@ public class FFmpegService : IDisposable
 
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
+
+                // Keep a tail of stderr for diagnostics (helps when FFmpeg exits with -22 etc.)
+                try
+                {
+                    if (stderrTail.Count >= 250)
+                        stderrTail.Dequeue();
+                    stderrTail.Enqueue(line);
+                }
+                catch
+                {
+                }
 
                 // Preferred: out_time_ms= (microseconds)
                 if (line.StartsWith("out_time_ms=", StringComparison.OrdinalIgnoreCase))
@@ -635,6 +815,18 @@ public class FFmpegService : IDisposable
 
             if (_currentProcess.ExitCode != 0)
             {
+                var tail = string.Empty;
+                try
+                {
+                    tail = string.Join(Environment.NewLine, stderrTail);
+                }
+                catch
+                {
+                }
+
+                if (!string.IsNullOrWhiteSpace(tail))
+                    throw new Exception($"FFmpeg exited with code {_currentProcess.ExitCode}{Environment.NewLine}{tail}");
+
                 throw new Exception($"FFmpeg exited with code {_currentProcess.ExitCode}");
             }
 
