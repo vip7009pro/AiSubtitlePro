@@ -1609,6 +1609,22 @@ public partial class MainViewModel : ObservableObject
         StatusMessage = $"Cut range set: {FormatTime(TimeSpan.Zero)} - {FormatTime(effectiveEndAbs - wnd.StartAbs)}";
     }
 
+    [RelayCommand]
+    private void EditVideo()
+    {
+        if (string.IsNullOrWhiteSpace(MediaFilePath) || !File.Exists(MediaFilePath))
+        {
+            MessageBox.Show("Please open a media file first.", "Edit Video", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var wnd = new EditVideoWindow();
+        wnd.Owner = Application.Current.MainWindow;
+        wnd.ShowDialog();
+
+        StatusMessage = "Video editing completed";
+    }
+
     private async Task GenerateWaveformAsync(string videoPath)
     {
         TryCleanupTempFiles();

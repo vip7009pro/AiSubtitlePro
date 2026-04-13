@@ -66,6 +66,36 @@ public class InverseBoolConverter : IValueConverter
     }
 }
 
+/// <summary>
+/// Formats a double value to a specific precision
+/// </summary>
+public class DoubleFormatConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is double d)
+        {
+            var format = parameter?.ToString() ?? "F2";
+            var suffix = string.Empty;
+            
+            // Check if we have a suffix after the format specifier (e.g., "F2x")
+            if (format.Length > 2 && char.IsLetter(format[format.Length - 1]))
+            {
+                suffix = format[format.Length - 1].ToString();
+                format = format.Substring(0, format.Length - 1);
+            }
+            
+            return d.ToString($"{format}", culture) + suffix;
+        }
+        return value?.ToString() ?? "";
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return Binding.DoNothing;
+    }
+}
+
 public class AssColorToBrushConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -83,3 +113,4 @@ public class AssColorToBrushConverter : IValueConverter
         return Binding.DoNothing;
     }
 }
+

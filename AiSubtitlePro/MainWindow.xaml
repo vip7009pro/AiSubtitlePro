@@ -83,6 +83,11 @@
                         <materialDesign:PackIcon Kind="ContentCut" />
                     </MenuItem.Icon>
                 </MenuItem>
+                <MenuItem Header="_Edit Video..." Command="{Binding EditVideoCommand}">
+                    <MenuItem.Icon>
+                        <materialDesign:PackIcon Kind="FilmEdit" />
+                    </MenuItem.Icon>
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="_Close Project" Command="{Binding CloseProjectCommand}" InputGestureText="Ctrl+L" />
                 <Separator />
